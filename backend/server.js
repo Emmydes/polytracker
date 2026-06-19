@@ -95,8 +95,9 @@ app.get('/api/signals/resolved', async (req, res) => {
     await runSignalLifecycle();
     const horizon = req.query.horizon || 'all';
     const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const decidedOnly = req.query.decided !== 'false';
     res.json({
-      signals: getResolvedSignals(horizon, limit),
+      signals: getResolvedSignals(horizon, limit, decidedOnly),
       lastUpdated: getLastUpdated(),
     });
   } catch (err) {

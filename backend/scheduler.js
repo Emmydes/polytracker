@@ -24,7 +24,7 @@ export function getRefreshState() {
   if (bootstrapState.running) {
     return {
       running: true,
-      phase: bootstrapState.phase ?? 'Initial setup (first deploy may take 5–10 min)…',
+      phase: bootstrapState.phase ?? 'Starting wallet scan…',
       startedAt: null,
       error: bootstrapState.error,
       results: null,
@@ -96,18 +96,27 @@ export async function bootstrapIfEmpty() {
 
   if (bootstrapState.running) return;
 
-  bootstrapState = { running: true, phase: 'Starting initial wallet discovery…', error: null };
-  console.log('Bootstrap: running initial discovery + picks (DB empty or stale)...');
+  const isRender = Boolean(process.env.RENDER);
+  const discoveryLimit = Number(process.env.BOOTSTRAP_DISCOVERY_LIMIT) || (isRender ? 50 : 120);
+
+  bootstrapState = { running: true, phase: 'Starting wallet scan…', error: null };
+  console.log(`Bootstrap: discovery limit ${discoveryLimit}${isRender ? ' (Render fast mode)' : ''}...`);
 
   try {
-    bootstrapState.phase = 'Discovering elite traders (several minutes)…';
-    const discovery = await runTraderDiscovery({ limit: 200, forceRefresh: true });
+    bootstrapState.phase = 'Scanning wallets… 0/?';
+    const discovery = await runTraderDiscovery({
+      limit: discoveryLimit,
+      forceRefresh: true,
+      onProgress: ({ evaluated, total, qualified }) => {
+        bootstrapState.phase = `Scanning wallets… ${evaluated}/${total} (${qualified} qualified)`;
+      },
+    });
     setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
     setMeta('last_discovery_evaluated', String(discovery.evaluated));
     setMeta('last_discovery_qualified', String(discovery.qualified));
     console.log(`Bootstrap discovery: ${discovery.qualified}/${discovery.evaluated} qualified`);
 
-    bootstrapState.phase = 'Generating swing + daily signals…';
+    bootstrapState.phase = 'Generating signals…';
     await runSignalLifecycle();
     const batch = await runPicksRefresh(['swing', 'intraday'], {
       quick: true,
@@ -145,9 +154,17 @@ export async function runManualRefresh(type = 'all') {
 
   try {
     if (type === 'all' || type === 'discovery') {
-      setPhase('Discovering elite traders (several minutes)…');
+      const isRender = Boolean(process.env.RENDER);
+      const discoveryLimit = Number(process.env.BOOTSTRAP_DISCOVERY_LIMIT) || (isRender ? 50 : 120);
+      setPhase('Scanning wallets… 0/?');
       console.log('Starting trader discovery...');
-      results.discovery = await runTraderDiscovery({ limit: 200, forceRefresh: true });
+      results.discovery = await runTraderDiscovery({
+        limit: discoveryLimit,
+        forceRefresh: true,
+        onProgress: ({ evaluated, total, qualified }) => {
+          setPhase(`Scanning wallets… ${evaluated}/${total} (${qualified} qualified)`);
+        },
+      });
       setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
       setMeta('last_discovery_evaluated', String(results.discovery.evaluated));
       setMeta('last_discovery_qualified', String(results.discovery.qualified));

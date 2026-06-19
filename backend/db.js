@@ -540,15 +540,18 @@ export function getTodaysIntradayPicks() {
   return picks.filter((p) => p.hours_until_close == null || Number(p.hours_until_close) > 0);
 }
 
-export function getResolvedSignals(horizon = 'all', limit = 50) {
+export function getResolvedSignals(horizon = 'all', limit = 50, decidedOnly = false) {
   const out = [];
+  const statusFilter = decidedOnly
+    ? "status IN ('WON', 'LOST')"
+    : "status IN ('WON', 'LOST', 'EXPIRED')";
 
   if (horizon === 'all' || horizon === 'swing') {
     out.push(
       ...getDb()
         .prepare(`
           SELECT *, 'swing' AS horizon FROM daily_picks
-          WHERE status IN ('WON', 'LOST', 'EXPIRED')
+          WHERE ${statusFilter}
           ORDER BY COALESCE(resolved_at, created_at) DESC
           LIMIT ?
         `)
@@ -561,7 +564,7 @@ export function getResolvedSignals(horizon = 'all', limit = 50) {
       ...getDb()
         .prepare(`
           SELECT *, 'intraday' AS horizon FROM intraday_picks
-          WHERE status IN ('WON', 'LOST', 'EXPIRED')
+          WHERE ${statusFilter}
           ORDER BY COALESCE(resolved_at, created_at) DESC
           LIMIT ?
         `)

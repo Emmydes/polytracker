@@ -167,7 +167,7 @@ function formatTraderResult(cached, meta = {}) {
 }
 
 export async function runTraderDiscovery(options = {}) {
-  const { limit = 200, forceRefresh = true } = options;
+  const { limit = 200, forceRefresh = true, onProgress = null } = options;
   const leaderboard = await fetchLeaderboard(limit);
 
   const leaderboardMap = new Map();
@@ -192,6 +192,9 @@ export async function runTraderDiscovery(options = {}) {
     const address = entry ? extractWalletAddress(entry) : addressKey;
 
     evaluated++;
+    if (onProgress && (evaluated % 3 === 0 || evaluated === addressesToEvaluate.length)) {
+      onProgress({ evaluated, total: addressesToEvaluate.length, qualified });
+    }
     try {
       const result = await evaluateTrader(address, {
         forceRefresh,

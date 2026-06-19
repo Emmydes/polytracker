@@ -126,7 +126,7 @@ export default function PicksDashboard({
           <p className="text-gray-400 mb-1">No active signals today.</p>
           <p className="text-gray-500 text-sm">
             {activeWalletCount === 0
-              ? 'First deploy? Initial wallet scan runs automatically — wait 5–10 min then refresh.'
+              ? 'Initial wallet scan runs automatically on first deploy — see progress above.'
               : 'Click refresh now to scan tracked wallets.'}
           </p>
         </div>

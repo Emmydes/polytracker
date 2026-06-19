@@ -124,3 +124,25 @@ export function winRateColor(rate) {
   if (rate >= 85) return 'text-amber-400';
   return 'text-gray-400';
 }
+
+/** Profit % on a $1 binary contract at entry_price (matches backend stats ROI). */
+export function calcSignalProfitPct(signal) {
+  if (signal.status === 'LOST') return -100;
+  if (signal.status !== 'WON') return null;
+  const entry = Number(signal.entry_price ?? 0);
+  if (entry <= 0) return null;
+  return Math.round(((1 - entry) / entry) * 100);
+}
+
+export function formatProfitPct(signal) {
+  const pct = calcSignalProfitPct(signal);
+  if (pct == null) return '—';
+  const sign = pct > 0 ? '+' : '';
+  return `${sign}${pct}%`;
+}
+
+export function profitPctColor(signal) {
+  const pct = calcSignalProfitPct(signal);
+  if (pct == null) return 'text-gray-400';
+  return pct >= 0 ? 'text-emerald-400' : 'text-red-400';
+}

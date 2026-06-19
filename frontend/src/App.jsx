@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import Home from './pages/Home.jsx';
 import Intraday from './pages/Intraday.jsx';
@@ -26,10 +26,60 @@ async function pollRefreshStatus(onProgress, maxWait = 10 * 60 * 1000) {
   throw new Error('Refresh timed out — try again in a moment');
 }
 
+function BootstrapBanner({ phase }) {
+  if (!phase) return null;
+
+  return (
+    <div className="mb-6 flex items-start gap-3 p-4 bg-accent/10 border border-accent/30 rounded-[12px] text-sm">
+      <svg
+        className="w-5 h-5 shrink-0 text-accent animate-spin mt-0.5"
+        fill="none"
+        viewBox="0 0 24 24"
+        aria-hidden
+      >
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path
+          className="opacity-75"
+          fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+        />
+      </svg>
+      <div>
+        <p className="font-medium text-gray-100">Initial setup in progress</p>
+        <p className="text-gray-400 mt-0.5">{phase}</p>
+        <p className="text-gray-500 text-xs mt-1">Signals appear automatically when the scan finishes.</p>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const location = useLocation();
   const [refreshing, setRefreshing] = useState(false);
   const [refreshPhase, setRefreshPhase] = useState('');
+  const [bootstrapPhase, setBootstrapPhase] = useState('');
+
+  const pollAppStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      const refresh = data.refresh;
+      if (refresh?.running && refresh?.source === 'bootstrap') {
+        setBootstrapPhase(refresh.phase || 'Starting wallet scan…');
+      } else {
+        setBootstrapPhase('');
+      }
+    } catch {
+      /* optional */
+    }
+  }, []);
+
+  useEffect(() => {
+    pollAppStatus();
+    const id = setInterval(pollAppStatus, 2000);
+    return () => clearInterval(id);
+  }, [pollAppStatus]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -38,6 +88,15 @@ export default function App() {
       const statusRes = await fetch('/api/status');
       const statusData = await statusRes.json();
       const onToday = location.pathname === '/today';
+      const refresh = statusData.refresh;
+
+      if (refresh?.running && refresh?.source === 'bootstrap') {
+        setRefreshPhase(refresh.phase || 'Initial scan in progress…');
+        await pollRefreshStatus(setRefreshPhase, 12 * 60 * 1000);
+        setRefreshPhase('Done');
+        await pollAppStatus();
+        return;
+      }
 
       let refreshType = 'intraday';
       if (!onToday) refreshType = 'swing';
@@ -53,7 +112,7 @@ export default function App() {
       if (res.status === 202 && (data.accepted || data.alreadyRunning)) {
         const label =
           data.alreadyRunning || data.source === 'bootstrap'
-            ? data.phase || 'Initial scan in progress…'
+            ? data.phase || 'Scan in progress…'
             : refreshType === 'all'
               ? 'Full scan (first run)…'
               : refreshType === 'intraday'
@@ -68,6 +127,7 @@ export default function App() {
         if (results?.intradayCount != null) parts.push(`${results.intradayCount} daily`);
         if (parts.length) setRefreshPhase(`Done — ${parts.join(', ')}`);
         else setRefreshPhase('Done');
+        await pollAppStatus();
         return;
       }
 
@@ -81,6 +141,8 @@ export default function App() {
       }, 1200);
     }
   };
+
+  const showBootstrap = Boolean(bootstrapPhase) && !refreshing;
 
   return (
     <div className="min-h-screen bg-background">
@@ -107,6 +169,7 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
+        {showBootstrap ? <BootstrapBanner phase={bootstrapPhase} /> : null}
         <Routes>
           <Route
             path="/"
