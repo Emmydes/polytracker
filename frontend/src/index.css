@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0f1e;
+  --color-card: #111827;
+  --color-navy: #0a0f1e;
+  --color-border: #1f2937;
+  --color-accent: #6366f1;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  @apply bg-background text-gray-100 antialiased min-h-screen font-sans;
+  margin: 0;
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.bg-background {
+  background-color: #0a0f1e;
+}
+
+.bg-card {
+  background-color: #111827;
+}
+
+.bg-navy {
+  background-color: #0d1424;
+}
+
+.border-border {
+  border-color: #1f2937;
+}
+
+.text-accent {
+  color: #6366f1;
+}
+
+.bg-accent {
+  background-color: #6366f1;
+}
+
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes picksGridEnter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.picks-grid-enter {
+  animation: picksGridEnter 300ms ease forwards;
+}
