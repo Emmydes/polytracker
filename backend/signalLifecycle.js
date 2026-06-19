@@ -40,22 +40,37 @@ export function getWinningSide(market) {
 }
 
 function repairInconsistentStatuses() {
+  const now = Math.floor(Date.now() / 1000);
   const db = getDb();
   db.prepare(`
     UPDATE daily_picks SET status = outcome, resolved_at = COALESCE(resolved_at, ?)
-    WHERE status = 'ACTIVE' AND outcome IN ('WON', 'LOST')
-  `).run(Math.floor(Date.now() / 1000));
+    WHERE status IN ('ACTIVE', 'EXPIRED') AND outcome IN ('WON', 'LOST')
+  `).run(now);
   db.prepare(`
     UPDATE intraday_picks SET status = outcome, resolved_at = COALESCE(resolved_at, ?)
-    WHERE status = 'ACTIVE' AND outcome IN ('WON', 'LOST')
-  `).run(Math.floor(Date.now() / 1000));
+    WHERE status IN ('ACTIVE', 'EXPIRED') AND outcome IN ('WON', 'LOST')
+  `).run(now);
+}
+
+function hasDecisiveOutcome(market) {
+  return getWinningOutcomeIndex(market) != null;
+}
+
+function resolveTokenId(signal, market) {
+  if (signal.token_id) return signal.token_id;
+  if (!market) return null;
+  return getTokenIdForSide(market, signal.recommended_side);
 }
 
 async function refreshSignalHours(signal, updateFn) {
   try {
     const market = await fetchMarketByConditionId(signal.market_id);
     const hours = getHoursUntilClose(market);
-    if (hours != null && hours !== signal.hours_until_close) {
+    if (
+      hours != null &&
+      signal.hours_until_close != null &&
+      hours !== signal.hours_until_close
+    ) {
       updateFn(signal.id, { hours_until_close: hours });
       signal.hours_until_close = hours;
     }
@@ -118,17 +133,20 @@ async function checkResolution(signal, updateFn, marketPrefetched = null) {
 
   const pastSettle = signalPastSettlement(signal);
   const closed = isMarketClosed(market) || pastSettle;
-  if (!closed) return false;
+  const decisive = hasDecisiveOutcome(market);
+  if (!closed && !decisive) return false;
 
   const now = Math.floor(Date.now() / 1000);
-  const won = didSignalWin(market, signal.recommended_side, signal.token_id);
+  const tokenId = resolveTokenId(signal, market);
+  const won = didSignalWin(market, signal.recommended_side, tokenId);
+  const resolvedFields = { resolved_at: now };
+  if (signal.hours_until_close != null) resolvedFields.hours_until_close = 0;
 
   if (won === true) {
     updateFn(signal.id, {
       status: 'WON',
       outcome: 'WON',
-      resolved_at: now,
-      hours_until_close: 0,
+      ...resolvedFields,
     });
     return true;
   }
@@ -137,8 +155,7 @@ async function checkResolution(signal, updateFn, marketPrefetched = null) {
     updateFn(signal.id, {
       status: 'LOST',
       outcome: 'LOST',
-      resolved_at: now,
-      hours_until_close: 0,
+      ...resolvedFields,
     });
     return true;
   }
@@ -147,8 +164,7 @@ async function checkResolution(signal, updateFn, marketPrefetched = null) {
     status: 'EXPIRED',
     outcome: 'EXPIRED',
     entry_window_close: signal.entry_window_close ?? now,
-    resolved_at: now,
-    hours_until_close: 0,
+    ...resolvedFields,
   });
   return true;
 }
@@ -166,7 +182,7 @@ async function processSignals(signals, updateFn, label) {
         continue;
       }
 
-      if (signalPastSettlement(signal)) {
+      if (signalPastSettlement(signal) && signal.status !== 'EXPIRED') {
         updateFn(signal.id, {
           status: 'EXPIRED',
           outcome: 'EXPIRED',
@@ -177,7 +193,7 @@ async function processSignals(signals, updateFn, label) {
         continue;
       }
 
-      if (await checkPriceExpiry(signal, updateFn)) {
+      if (signal.status !== 'EXPIRED' && (await checkPriceExpiry(signal, updateFn))) {
         expired++;
       }
     } catch (err) {

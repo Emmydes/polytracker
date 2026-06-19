@@ -313,14 +313,19 @@ export function getDailyPicks(date, activeOnly = false) {
 
 export function getActiveSwingSignals() {
   return getDb()
-    .prepare("SELECT * FROM daily_picks WHERE status = 'ACTIVE' ORDER BY created_at DESC")
+    .prepare(`
+      SELECT * FROM daily_picks
+      WHERE status IN ('ACTIVE', 'EXPIRED')
+        AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
+      ORDER BY created_at DESC
+    `)
     .all();
 }
 
 export function updateSwingSignal(id, fields) {
   const allowed = [
     'status', 'entry_window_close', 'current_price', 'drift_pct',
-    'outcome', 'resolved_at', 'hours_until_close',
+    'outcome', 'resolved_at',
   ];
   const sets = [];
   const params = { id };
@@ -507,7 +512,12 @@ export function getIntradayPicks(date, activeOnly = false) {
 
 export function getActiveDailySignals() {
   return getDb()
-    .prepare("SELECT * FROM intraday_picks WHERE status = 'ACTIVE' ORDER BY created_at DESC")
+    .prepare(`
+      SELECT * FROM intraday_picks
+      WHERE status IN ('ACTIVE', 'EXPIRED')
+        AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
+      ORDER BY created_at DESC
+    `)
     .all();
 }
 
