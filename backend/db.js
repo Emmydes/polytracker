@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { filterEnterablePicks } from './pickFilters.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.join(__dirname, 'polytracker.db');
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'polytracker.db');
 
 let db;
 
@@ -209,7 +209,7 @@ export function getEliteTraders(includeCoolingOff = true) {
 
 /** Active tracked wallets for signal generation (excludes DEGRADED). */
 export function getActiveTrackedWallets() {
-  return getDb()
+  const joined = getDb()
     .prepare(`
       SELECT et.*
       FROM elite_traders et
@@ -217,6 +217,12 @@ export function getActiveTrackedWallets() {
       WHERE ws.status = 'ACTIVE' AND et.is_cooling_off = 0
       ORDER BY et.total_profit DESC
     `)
+    .all();
+
+  if (joined.length > 0) return joined;
+
+  return getDb()
+    .prepare('SELECT * FROM elite_traders WHERE is_cooling_off = 0 ORDER BY total_profit DESC')
     .all();
 }
 

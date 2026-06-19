@@ -2,12 +2,12 @@ import cron from 'node-cron';
 import { runTraderDiscovery } from './traderScorer.js';
 import { runPicksRefresh, generateDailyPicks, generateIntradayPicks } from './recommender.js';
 import { sendDailyPicksAlert } from './telegram.js';
-import { setMeta, getMeta, getActiveWalletCount } from './db.js';
+import { setMeta, getMeta, getActiveWalletCount, getActiveTrackedWallets } from './db.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
 import {
   runInitialBootstrap,
-  startBackgroundDiscovery,
-  getDiscoveryState,
+  maybeStartBackgroundDiscovery,
+  refreshSignalsFromCache,
 } from './discoveryWorker.js';
 
 let refreshState = {

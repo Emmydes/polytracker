@@ -40,6 +40,22 @@ const DRIFT_LATE = 15;
 const COORDINATION_WINDOW_MS = 4 * 60 * 60 * 1000;
 const HOLDERS_PER_MARKET = 30;
 
+function adaptHorizon(horizonKey, walletCount) {
+  const base = HORIZONS[horizonKey];
+  if (walletCount >= 8) return { ...base };
+  if (walletCount >= 4) {
+    return {
+      ...base,
+      minConsensus: Math.min(base.minConsensus, 2),
+      minSignals: 1,
+    };
+  }
+  return {
+    ...base,
+    minConsensus: 1,
+    minSignals: 1,
+    minSoloPositionSize: horizonKey === 'intraday' ? 50 : base.minSoloPositionSize,
+  };
 const HORIZONS = {
   swing: {
     label: 'swing',
@@ -110,7 +126,7 @@ async function generatePicks(horizonKey, options = {}) {
 
 async function generatePicksWithContext(horizonKey, ctx) {
   const { quick, finalPriceCheck, eliteMap, totalTrackedWallets, allPositions, portfolioTotals, positionLookup } = ctx;
-  const horizon = HORIZONS[horizonKey];
+  const horizon = adaptHorizon(horizonKey, totalTrackedWallets);
   const date = new Date().toISOString().slice(0, 10);
 
   console.log(`Generating ${horizonKey} picks (quick=${quick})…`);
@@ -512,7 +528,7 @@ function selectDailySignals(candidates, horizon) {
     filtered = candidates;
   }
 
-  return filtered.slice(0, Math.max(minRequired, Math.min(horizon.maxPicks, filtered.length)));
+  return filtered.slice(0, Math.min(horizon.maxPicks, filtered.length));
 }
 
 function mergeCandidates(...lists) {

@@ -3,7 +3,7 @@ import { runPicksRefresh } from './recommender.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
 import { setMeta, getMeta, getActiveWalletCount } from './db.js';
 
-const INITIAL_WALLETS = Number(process.env.BOOTSTRAP_DISCOVERY_LIMIT) || 60;
+const INITIAL_WALLETS = Number(process.env.BOOTSTRAP_DISCOVERY_LIMIT) || 100;
 const BATCH_SIZE = Number(process.env.DISCOVERY_BATCH_SIZE) || 12;
 const PICKS_EVERY_BATCHES = 1;
 
@@ -26,11 +26,11 @@ export function getDiscoveryState() {
 function updatePhase() {
   const { evaluated, total, qualified } = discoveryState;
   if (discoveryState.complete) {
-    discoveryState.phase = `Background scan complete — ${qualified} elite traders tracked`;
+    discoveryState.phase = null;
     return;
   }
   if (total === 0) {
-    discoveryState.phase = 'Preparing wallet list…';
+    discoveryState.phase = null;
     return;
   }
   discoveryState.phase = `Background scan… ${evaluated}/${total} (${qualified} elite)`;
@@ -40,15 +40,15 @@ async function getQueue() {
   if (queueCache) return queueCache;
   queueCache = await buildDiscoveryQueue({
     leaderboardLimit: Number(process.env.DISCOVERY_LEADERBOARD_LIMIT) || 100,
-    holderMarketCount: Number(process.env.DISCOVERY_HOLDER_MARKETS) || 25,
-    holdersPerMarket: Number(process.env.DISCOVERY_HOLDERS_PER_MARKET) || 15,
+    holderMarketCount: Number(process.env.DISCOVERY_HOLDER_MARKETS) || 0,
+    holdersPerMarket: Number(process.env.DISCOVERY_HOLDERS_PER_MARKET) || 0,
   });
   setMeta('discovery_queue_total', String(queueCache.addresses.length));
   return queueCache;
 }
 
-async function refreshSignalsFromCache(reason) {
-  console.log(`Discovery: refreshing signals (${reason})…`);
+export async function refreshSignalsFromCache(reason) {
+  console.log(`Refreshing signals (${reason})…`);
   await runSignalLifecycle();
   const batch = await runPicksRefresh(['swing', 'intraday'], {
     quick: true,
@@ -57,19 +57,26 @@ async function refreshSignalsFromCache(reason) {
   setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
   setMeta('last_picks_count', String(batch.swing?.length ?? 0));
   setMeta('last_intraday_count', String(batch.intraday?.length ?? 0));
+  console.log(`Signals: ${batch.swing?.length ?? 0} swing, ${batch.intraday?.length ?? 0} daily`);
   return batch;
 }
 
-/** Fast first pass: scan initial wallets and publish first signals. */
+/** Fast first pass: scan leaderboard wallets and publish signals. */
 export async function runInitialBootstrap(onProgress) {
-  const queue = await getQueue();
-  const batchSize = Math.min(INITIAL_WALLETS, queue.addresses.length);
+  const queue = await buildDiscoveryQueue({
+    leaderboardLimit: INITIAL_WALLETS,
+    holderMarketCount: 0,
+    holdersPerMarket: 0,
+  });
+  queueCache = queue;
+  setMeta('discovery_queue_total', String(queue.addresses.length));
 
-  onProgress?.(`Scanning wallets… 0/${batchSize}`);
+  const batchSize = queue.addresses.length;
+  onProgress?.(`Loading traders… 0/${batchSize}`);
   const batch = await evaluateWalletBatch(queue, 0, batchSize, {
     forceRefresh: true,
     onProgress: ({ evaluated, total, qualified }) => {
-      onProgress?.(`Scanning wallets… ${evaluated}/${total} (${qualified} qualified)`);
+      onProgress?.(`Loading traders… ${evaluated}/${total} (${qualified} qualified)`);
     },
   });
 
@@ -84,8 +91,20 @@ export async function runInitialBootstrap(onProgress) {
   return { ...batch, queueTotal: queue.addresses.length };
 }
 
+export function maybeStartBackgroundDiscovery() {
+  if (process.env.SKIP_BACKGROUND_DISCOVERY === 'true') {
+    discoveryState.complete = true;
+    discoveryState.running = false;
+    discoveryState.phase = null;
+    return;
+  }
+  startBackgroundDiscovery();
+}
+
 export function startBackgroundDiscovery() {
   if (discoveryState.running || discoveryState.complete) return;
+  if (process.env.SKIP_BACKGROUND_DISCOVERY === 'true') return;
+
   runBackgroundDiscoveryLoop().catch((err) => {
     discoveryState.error = err.message;
     discoveryState.running = false;
@@ -101,7 +120,7 @@ async function runBackgroundDiscoveryLoop() {
   if (nextIndex >= total) {
     discoveryState = {
       running: false,
-      phase: `Background scan complete — ${getActiveWalletCount()} elite traders`,
+      phase: null,
       error: null,
       evaluated: total,
       total,
@@ -121,18 +140,13 @@ async function runBackgroundDiscoveryLoop() {
     complete: false,
   };
   updatePhase();
-  console.log(`Background discovery: resuming at ${nextIndex}/${total}`);
+  console.log(`Background discovery: ${nextIndex}/${total}`);
 
   let batchesSincePicks = 0;
 
   while (nextIndex < total) {
     const batch = await evaluateWalletBatch(queue, nextIndex, BATCH_SIZE, {
       forceRefresh: true,
-      onProgress: ({ evaluated }) => {
-        discoveryState.evaluated = nextIndex + evaluated;
-        discoveryState.qualified = getActiveWalletCount();
-        updatePhase();
-      },
     });
 
     nextIndex += batch.evaluated;
@@ -158,9 +172,7 @@ async function runBackgroundDiscoveryLoop() {
 
   discoveryState.running = false;
   discoveryState.complete = true;
-  discoveryState.evaluated = total;
-  discoveryState.qualified = getActiveWalletCount();
-  updatePhase();
+  discoveryState.phase = null;
   console.log(`Background discovery complete: ${discoveryState.qualified} elite of ${total} scanned`);
 
   try {
