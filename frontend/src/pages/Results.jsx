@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { enrichPick } from '../utils/categories.js';
-import { formatProfitPct, profitPctColor } from '../utils/signalFormat.js';
+import { formatProfitPct, getSignalResultStatus, profitPctColor } from '../utils/signalFormat.js';
 
 const API = '/api';
 
@@ -38,11 +38,13 @@ export default function Results() {
   const rows = useMemo(
     () =>
       signals
-        .filter((s) => s.status === 'WON' || s.status === 'LOST')
         .map((signal) => {
-          const pick = enrichPick(signal);
-          return { signal, pick };
-        }),
+          const status = getSignalResultStatus(signal);
+          if (status !== 'WON' && status !== 'LOST') return null;
+          const pick = enrichPick({ ...signal, status });
+          return { signal: { ...signal, status }, pick };
+        })
+        .filter(Boolean),
     [signals]
   );
 

@@ -73,6 +73,20 @@ export function getEntryWindowEndMs(pick, intraday) {
   return created + defaultHours * 3600 * 1000;
 }
 
+export function isPickEnterable(pick, nowMs = Date.now()) {
+  if (!pick || pick.status !== 'ACTIVE') return false;
+  if (pick.hours_until_close != null && Number(pick.hours_until_close) <= 0) return false;
+  const nowSec = Math.floor(nowMs / 1000);
+  if (pick.entry_window_close != null && Number(pick.entry_window_close) <= nowSec) return false;
+  return true;
+}
+
+export function getSignalResultStatus(signal) {
+  if (signal.status === 'WON' || signal.status === 'LOST') return signal.status;
+  if (signal.outcome === 'WON' || signal.outcome === 'LOST') return signal.outcome;
+  return signal.status;
+}
+
 export function getSmartMoneyPct(pick) {
   return Math.round((pick.entry_price ?? pick.current_price ?? 0) * 100);
 }
@@ -127,8 +141,9 @@ export function winRateColor(rate) {
 
 /** Profit % on a $1 binary contract at entry_price (matches backend stats ROI). */
 export function calcSignalProfitPct(signal) {
-  if (signal.status === 'LOST') return -100;
-  if (signal.status !== 'WON') return null;
+  const status = getSignalResultStatus(signal);
+  if (status === 'LOST') return -100;
+  if (status !== 'WON') return null;
   const entry = Number(signal.entry_price ?? 0);
   if (entry <= 0) return null;
   return Math.round(((1 - entry) / entry) * 100);

@@ -1,9 +1,18 @@
-import { fetchTokenPrice, fetchMarketByConditionId, calculateDriftPct, getTokenIdForSide, getHoursUntilClose } from './polymarketApi.js';
+import {
+  fetchTokenPrice,
+  fetchMarketByConditionId,
+  calculateDriftPct,
+  getTokenIdForSide,
+  getHoursUntilClose,
+  didSignalWin,
+  getWinningOutcomeIndex,
+} from './polymarketApi.js';
 import {
   getActiveSwingSignals,
   getActiveDailySignals,
   updateSwingSignal,
   updateDailySignal,
+  getDb,
 } from './db.js';
 
 const ENTRY_WINDOW_DRIFT_PCT = 5;
@@ -24,56 +33,36 @@ export function isMarketClosed(market) {
 }
 
 export function getWinningSide(market) {
-  if (!market) return null;
-
-  let prices = market.outcomePrices;
-  if (typeof prices === 'string') {
-    try {
-      prices = JSON.parse(prices);
-    } catch {
-      prices = null;
-    }
-  }
-
-  let outcomes = market.outcomes;
-  if (typeof outcomes === 'string') {
-    try {
-      outcomes = JSON.parse(outcomes);
-    } catch {
-      outcomes = null;
-    }
-  }
-
-  if (Array.isArray(prices) && prices.length >= 2) {
-    const p0 = Number(prices[0]);
-    const p1 = Number(prices[1]);
-
-    if (p0 >= 0.95 && p1 <= 0.05) return 'YES';
-    if (p1 >= 0.95 && p0 <= 0.05) return 'NO';
-
-    if (isMarketClosed(market)) {
-      if (p0 > p1) return 'YES';
-      if (p1 > p0) return 'NO';
-    }
-  }
-
-  const tokens = market.tokens ?? [];
-  for (const t of tokens) {
-    const price = Number(t.price ?? t.lastPrice ?? 0);
-    const outcome = (t.outcome ?? t.name ?? '').toString().toUpperCase();
-    if (price >= 0.95) {
-      if (outcome.includes('YES')) return 'YES';
-      if (outcome.includes('NO')) return 'NO';
-    }
-  }
-
-  if (isMarketClosed(market) && market.winner) {
-    const w = market.winner.toString().toUpperCase();
-    if (w.includes('YES') || w === '1') return 'YES';
-    if (w.includes('NO') || w === '0') return 'NO';
-  }
-
+  const idx = getWinningOutcomeIndex(market);
+  if (idx === 0) return 'YES';
+  if (idx === 1) return 'NO';
   return null;
+}
+
+function repairInconsistentStatuses() {
+  const db = getDb();
+  db.prepare(`
+    UPDATE daily_picks SET status = outcome, resolved_at = COALESCE(resolved_at, ?)
+    WHERE status = 'ACTIVE' AND outcome IN ('WON', 'LOST')
+  `).run(Math.floor(Date.now() / 1000));
+  db.prepare(`
+    UPDATE intraday_picks SET status = outcome, resolved_at = COALESCE(resolved_at, ?)
+    WHERE status = 'ACTIVE' AND outcome IN ('WON', 'LOST')
+  `).run(Math.floor(Date.now() / 1000));
+}
+
+async function refreshSignalHours(signal, updateFn) {
+  try {
+    const market = await fetchMarketByConditionId(signal.market_id);
+    const hours = getHoursUntilClose(market);
+    if (hours != null && hours !== signal.hours_until_close) {
+      updateFn(signal.id, { hours_until_close: hours });
+      signal.hours_until_close = hours;
+    }
+    return market;
+  } catch {
+    return null;
+  }
 }
 
 async function checkPriceExpiry(signal, updateFn) {
@@ -113,56 +102,41 @@ async function checkPriceExpiry(signal, updateFn) {
   return false;
 }
 
-function dominantSide(prices) {
-  if (!Array.isArray(prices) || prices.length < 2) return null;
-  const p0 = Number(prices[0]);
-  const p1 = Number(prices[1]);
-  if (Math.abs(p0 - p1) < 0.15) return null;
-  return p0 > p1 ? 'YES' : 'NO';
-}
-
-function parseJsonArray(value) {
-  if (Array.isArray(value)) return value;
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 function signalPastSettlement(signal) {
   return signal.hours_until_close != null && Number(signal.hours_until_close) <= 0;
 }
 
-async function checkResolution(signal, updateFn) {
-  let market;
-  try {
-    market = await fetchMarketByConditionId(signal.market_id);
-  } catch {
-    return false;
+async function checkResolution(signal, updateFn, marketPrefetched = null) {
+  let market = marketPrefetched;
+  if (!market) {
+    try {
+      market = await fetchMarketByConditionId(signal.market_id);
+    } catch {
+      return false;
+    }
   }
 
   const pastSettle = signalPastSettlement(signal);
   const closed = isMarketClosed(market) || pastSettle;
   if (!closed) return false;
 
-  let winningSide = getWinningSide(market);
+  const now = Math.floor(Date.now() / 1000);
+  const won = didSignalWin(market, signal.recommended_side, signal.token_id);
 
-  if (!winningSide && pastSettle) {
-    const prices = parseJsonArray(market?.outcomePrices);
-    winningSide = dominantSide(prices);
+  if (won === true) {
+    updateFn(signal.id, {
+      status: 'WON',
+      outcome: 'WON',
+      resolved_at: now,
+      hours_until_close: 0,
+    });
+    return true;
   }
 
-  const now = Math.floor(Date.now() / 1000);
-
-  if (winningSide) {
-    const won = signal.recommended_side === winningSide;
+  if (won === false) {
     updateFn(signal.id, {
-      status: won ? 'WON' : 'LOST',
-      outcome: won ? 'WON' : 'LOST',
+      status: 'LOST',
+      outcome: 'LOST',
       resolved_at: now,
       hours_until_close: 0,
     });
@@ -179,57 +153,54 @@ async function checkResolution(signal, updateFn) {
   return true;
 }
 
-export async function processSwingSignalLifecycle() {
-  const signals = getActiveSwingSignals();
+async function processSignals(signals, updateFn, label) {
   let expired = 0;
   let resolved = 0;
 
   for (const signal of signals) {
     try {
-      if (await checkResolution(signal, updateSwingSignal)) {
+      const market = await refreshSignalHours(signal, updateFn);
+
+      if (await checkResolution(signal, updateFn, market)) {
         resolved++;
         continue;
       }
-      if (await checkPriceExpiry(signal, updateSwingSignal)) {
+
+      if (signalPastSettlement(signal)) {
+        updateFn(signal.id, {
+          status: 'EXPIRED',
+          outcome: 'EXPIRED',
+          resolved_at: Math.floor(Date.now() / 1000),
+          hours_until_close: 0,
+        });
+        expired++;
+        continue;
+      }
+
+      if (await checkPriceExpiry(signal, updateFn)) {
         expired++;
       }
     } catch (err) {
-      console.warn(`Swing lifecycle failed for ${signal.market_id}:`, err.message);
+      console.warn(`${label} lifecycle failed for ${signal.market_id}:`, err.message);
     }
   }
 
   if (expired || resolved) {
-    console.log(`Swing lifecycle: ${expired} expired, ${resolved} resolved`);
+    console.log(`${label} lifecycle: ${expired} expired, ${resolved} resolved`);
   }
   return { expired, resolved };
+}
+
+export async function processSwingSignalLifecycle() {
+  return processSignals(getActiveSwingSignals(), updateSwingSignal, 'Swing');
 }
 
 export async function processDailySignalLifecycle() {
-  const signals = getActiveDailySignals();
-  let expired = 0;
-  let resolved = 0;
-
-  for (const signal of signals) {
-    try {
-      if (await checkResolution(signal, updateDailySignal)) {
-        resolved++;
-        continue;
-      }
-      if (await checkPriceExpiry(signal, updateDailySignal)) {
-        expired++;
-      }
-    } catch (err) {
-      console.warn(`Daily lifecycle failed for ${signal.market_id}:`, err.message);
-    }
-  }
-
-  if (expired || resolved) {
-    console.log(`Daily lifecycle: ${expired} expired, ${resolved} resolved`);
-  }
-  return { expired, resolved };
+  return processSignals(getActiveDailySignals(), updateDailySignal, 'Daily');
 }
 
 export async function runSignalLifecycle() {
+  repairInconsistentStatuses();
   const swing = await processSwingSignalLifecycle();
   const daily = await processDailySignalLifecycle();
   return { swing, daily };

@@ -457,9 +457,11 @@ export function normalizePosition(pos) {
   } else if (pos.outcomeIndex === 0) {
     side = 'YES';
   } else {
-    const sideRaw = (pos?.outcome ?? pos?.side ?? pos?.position ?? '').toString().toUpperCase();
-    if (sideRaw.includes('NO') || sideRaw === '0' || sideRaw === 'FALSE') side = 'NO';
-    if (sideRaw.includes('YES') || sideRaw === '1' || sideRaw === 'TRUE') side = 'YES';
+    const sideRaw = (pos?.outcome ?? pos?.side ?? pos?.position ?? '').toString().trim();
+    const upper = sideRaw.toUpperCase();
+    if (upper.includes('NO') || upper === '0' || upper === 'FALSE') side = 'NO';
+    else if (upper.includes('YES') || upper === '1' || upper === 'TRUE') side = 'YES';
+    else if (sideRaw) side = sideRaw;
   }
 
   const curPrice = Number(pos?.curPrice ?? pos?.cur_price ?? 0);
@@ -520,6 +522,97 @@ export function getTokenIdForSide(market, side) {
     return side === 'YES' ? tokens[0] : tokens[1];
   }
   return market?.clobTokenIds?.[side === 'YES' ? 0 : 1] ?? null;
+}
+
+export function parseMarketOutcomes(market) {
+  let outcomes = market?.outcomes;
+  if (typeof outcomes === 'string') {
+    try {
+      outcomes = JSON.parse(outcomes);
+    } catch {
+      outcomes = [];
+    }
+  }
+  let prices = market?.outcomePrices;
+  if (typeof prices === 'string') {
+    try {
+      prices = JSON.parse(prices);
+    } catch {
+      prices = [];
+    }
+  }
+  let tokenIds = market?.clobTokenIds;
+  if (typeof tokenIds === 'string') {
+    try {
+      tokenIds = JSON.parse(tokenIds);
+    } catch {
+      tokenIds = [];
+    }
+  }
+  return {
+    outcomes: Array.isArray(outcomes) ? outcomes : [],
+    prices: Array.isArray(prices) ? prices.map(Number) : [],
+    tokenIds: Array.isArray(tokenIds) ? tokenIds : [],
+  };
+}
+
+/** Which outcome index (0 or 1) won, for binary / team-name markets. */
+export function getWinningOutcomeIndex(market) {
+  const { prices } = parseMarketOutcomes(market);
+  if (prices.length < 2) return null;
+
+  const p0 = Number(prices[0]);
+  const p1 = Number(prices[1]);
+
+  if (p0 >= 0.9 && p1 <= 0.1) return 0;
+  if (p1 >= 0.9 && p0 <= 0.1) return 1;
+
+  if (market && (market.closed === true || market.resolved === true || market.umaResolutionStatus === 'resolved')) {
+    if (p0 > p1 + 0.1) return 0;
+    if (p1 > p0 + 0.1) return 1;
+  }
+
+  const hours = getHoursUntilClose(market);
+  if (hours != null && hours <= 0) {
+    if (p0 > p1 + 0.05) return 0;
+    if (p1 > p0 + 0.05) return 1;
+  }
+
+  return null;
+}
+
+/** Map signal side / token to outcome index 0 or 1. */
+export function getSignalOutcomeIndex(market, recommendedSide, tokenId) {
+  const { outcomes, tokenIds } = parseMarketOutcomes(market);
+
+  if (tokenId && tokenIds.length) {
+    const idx = tokenIds.findIndex((t) => String(t) === String(tokenId));
+    if (idx >= 0) return idx;
+  }
+
+  const side = (recommendedSide ?? '').toString().trim();
+  const upper = side.toUpperCase();
+  if (upper === 'YES' || upper === '1' || upper === 'TRUE') return 0;
+  if (upper === 'NO' || upper === '0' || upper === 'FALSE') return 1;
+
+  const lower = side.toLowerCase();
+  for (let i = 0; i < outcomes.length; i++) {
+    const label = outcomes[i]?.toString().trim().toLowerCase() ?? '';
+    if (!label) continue;
+    if (label === lower || label.includes(lower) || lower.includes(label)) return i;
+  }
+
+  return null;
+}
+
+export function didSignalWin(market, recommendedSide, tokenId) {
+  const winIdx = getWinningOutcomeIndex(market);
+  if (winIdx == null) return null;
+
+  const signalIdx = getSignalOutcomeIndex(market, recommendedSide, tokenId);
+  if (signalIdx == null) return null;
+
+  return signalIdx === winIdx;
 }
 
 export function calculatePotentialReturn(price) {

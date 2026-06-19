@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { filterEnterablePicks } from './pickFilters.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = path.join(__dirname, 'polytracker.db');
@@ -343,7 +344,7 @@ export function getTodaysPicks() {
     const latest = getLatestPicksDate();
     if (latest) picks = getDailyPicks(latest, true);
   }
-  return picks;
+  return filterEnterablePicks(picks);
 }
 
 export function getSwingSignalStats() {
@@ -537,14 +538,14 @@ export function getTodaysIntradayPicks() {
     const latest = getLatestIntradayDate();
     if (latest) picks = getIntradayPicks(latest, true);
   }
-  return picks.filter((p) => p.hours_until_close == null || Number(p.hours_until_close) > 0);
+  return filterEnterablePicks(picks);
 }
 
 export function getResolvedSignals(horizon = 'all', limit = 50, decidedOnly = false) {
   const out = [];
   const statusFilter = decidedOnly
-    ? "status IN ('WON', 'LOST')"
-    : "status IN ('WON', 'LOST', 'EXPIRED')";
+    ? "(status IN ('WON', 'LOST') OR outcome IN ('WON', 'LOST'))"
+    : "(status IN ('WON', 'LOST', 'EXPIRED') OR outcome IN ('WON', 'LOST', 'EXPIRED'))";
 
   if (horizon === 'all' || horizon === 'swing') {
     out.push(
@@ -572,8 +573,22 @@ export function getResolvedSignals(horizon = 'all', limit = 50, decidedOnly = fa
     );
   }
 
-  out.sort((a, b) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0));
-  return out.slice(0, limit);
+  const normalized = out.map((row) => ({
+    ...row,
+    status:
+      row.status === 'WON' || row.status === 'LOST'
+        ? row.status
+        : row.outcome === 'WON' || row.outcome === 'LOST'
+          ? row.outcome
+          : row.status,
+  }));
+
+  normalized.sort(
+    (a, b) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0)
+  );
+  return normalized
+    .filter((row) => !decidedOnly || row.status === 'WON' || row.status === 'LOST')
+    .slice(0, limit);
 }
 
 export function getDailySignalHistory(days = 3) {

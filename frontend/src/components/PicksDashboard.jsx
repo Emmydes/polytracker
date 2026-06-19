@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { enrichPick, getCategoryLabel, pickMatchesFilter } from '../utils/categories.js';
-import { formatDisplayDate } from '../utils/signalFormat.js';
+import { formatDisplayDate, isPickEnterable } from '../utils/signalFormat.js';
 import CategoryFilter from './CategoryFilter.jsx';
 import SignalCard from './SignalCard.jsx';
 import SkeletonCard from './SkeletonCard.jsx';
@@ -58,7 +58,10 @@ export default function PicksDashboard({
   const activeFilter = searchParams.get('filter') || 'all';
   const [expandedId, setExpandedId] = useState(null);
 
-  const enrichedPicks = useMemo(() => picks.map(enrichPick), [picks]);
+  const enrichedPicks = useMemo(
+    () => picks.map(enrichPick).filter((p) => isPickEnterable(p)),
+    [picks]
+  );
   const activeCount = enrichedPicks.filter((p) => p.status !== 'EXPIRED').length;
   const historyMap = useMemo(() => buildHistoryMap(historyDays), [historyDays]);
 
