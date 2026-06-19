@@ -21,7 +21,6 @@ let refreshState = {
 
 let bootstrapState = {
   running: false,
-  phase: null,
   error: null,
 };
 
@@ -38,35 +37,18 @@ export function getManualRefreshState() {
   };
 }
 
+/** UI-facing refresh state — manual refresh only (no wallet scan banners). */
 export function getRefreshState() {
   if (refreshState.running) {
     return { ...refreshState };
   }
-  if (bootstrapState.running) {
-    return {
-      running: true,
-      phase: bootstrapState.phase ?? 'Starting wallet scan…',
-      startedAt: null,
-      error: bootstrapState.error,
-      results: null,
-      source: 'bootstrap',
-    };
-  }
-  const discovery = getDiscoveryState();
-  if (discovery.running) {
-    return {
-      running: true,
-      phase: discovery.phase,
-      startedAt: null,
-      error: discovery.error,
-      results: null,
-      source: 'discovery',
-      evaluated: discovery.evaluated,
-      total: discovery.total,
-      qualified: discovery.qualified,
-    };
-  }
-  return { ...refreshState };
+  return {
+    running: false,
+    phase: null,
+    error: null,
+    results: refreshState.results,
+    source: null,
+  };
 }
 
 function setPhase(phase) {
@@ -122,31 +104,42 @@ export function startScheduler() {
 }
 
 export async function bootstrapIfEmpty() {
-  const walletCount = getActiveWalletCount();
-  const picksCount = getMeta('last_picks_count');
-  const discoveryIndex = Number(getMeta('discovery_next_index') || 0);
-  if (walletCount > 0 && picksCount && Number(picksCount) > 0 && discoveryIndex > 0) {
-    console.log(`Bootstrap skipped: ${walletCount} active wallets, ${picksCount} picks cached`);
-    startBackgroundDiscovery();
+  const tracked = getActiveTrackedWallets().length;
+  const picksCount = Number(getMeta('last_picks_count') || 0);
+  const intradayCount = Number(getMeta('last_intraday_count') || 0);
+  const hasPicks = picksCount > 0 || intradayCount > 0;
+
+  if (tracked > 0 && hasPicks) {
+    console.log(`Bootstrap skipped: ${tracked} wallets, ${picksCount} swing / ${intradayCount} daily`);
+    maybeStartBackgroundDiscovery();
+    return;
+  }
+
+  if (tracked > 0 && !hasPicks) {
+    console.log(`Bootstrap: ${tracked} wallets cached — generating signals`);
+    try {
+      await refreshSignalsFromCache('startup');
+    } catch (err) {
+      console.error('Startup picks refresh failed:', err.message);
+    }
+    maybeStartBackgroundDiscovery();
     return;
   }
 
   if (bootstrapState.running) return;
 
-  bootstrapState = { running: true, phase: 'Starting wallet scan…', error: null };
-  console.log('Bootstrap: quick initial scan then background discovery…');
+  bootstrapState = { running: true, error: null };
+  console.log('Bootstrap: loading traders and generating first signals…');
 
   try {
-    await runInitialBootstrap((phase) => {
-      bootstrapState.phase = phase;
-    });
-    console.log('Bootstrap initial pass complete — starting background discovery');
+    await runInitialBootstrap();
+    console.log('Bootstrap complete');
   } catch (err) {
     bootstrapState.error = err.message;
     console.error('Bootstrap failed:', err.message);
   } finally {
-    bootstrapState = { running: false, phase: null, error: bootstrapState.error };
-    startBackgroundDiscovery();
+    bootstrapState = { running: false, error: bootstrapState.error };
+    maybeStartBackgroundDiscovery();
   }
 }
 
@@ -157,7 +150,7 @@ export async function runManualRefresh(type = 'swing') {
 
   refreshState = {
     running: true,
-    phase: 'Updating signals from tracked wallets…',
+    phase: 'Updating signals…',
     startedAt: Date.now(),
     error: null,
     results: null,
@@ -232,27 +225,16 @@ export function runManualRefreshAsync(type = 'swing') {
 }
 
 export function getLastUpdated() {
-  const discovery = getDiscoveryState();
   return {
     discovery: getMeta('last_discovery'),
     picks: getMeta('last_picks_generated'),
     manualRefresh: getMeta('last_manual_refresh'),
     discoveryEvaluated: getMeta('last_discovery_evaluated'),
     discoveryQualified: getMeta('last_discovery_qualified'),
-    discoveryQueueTotal: getMeta('discovery_queue_total'),
-    discoveryNextIndex: getMeta('discovery_next_index'),
     picksCount: getMeta('last_picks_count'),
     intraday: getMeta('last_intraday_generated'),
     intradayCount: getMeta('last_intraday_count'),
     activeWalletCount: getActiveWalletCount(),
     refresh: getRefreshState(),
-    backgroundDiscovery: {
-      running: discovery.running,
-      complete: discovery.complete,
-      phase: discovery.phase,
-      evaluated: discovery.evaluated,
-      total: discovery.total,
-      qualified: discovery.qualified,
-    },
   };
 }

@@ -4,12 +4,18 @@ services:
     runtime: node
     buildCommand: npm run install:all && npm run build
     startCommand: npm start --prefix backend
+    disk:
+      name: polytracker-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATABASE_PATH
+        value: /var/data/polytracker.db
       - key: BOOTSTRAP_DISCOVERY_LIMIT
-        value: "60"
-      - key: DISCOVERY_BATCH_SIZE
-        value: "12"
+        value: "100"
+      - key: SKIP_BACKGROUND_DISCOVERY
+        value: "true"
       - key: DISCOVERY_LEADERBOARD_LIMIT
         value: "100"

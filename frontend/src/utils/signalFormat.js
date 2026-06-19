@@ -75,7 +75,6 @@ export function getEntryWindowEndMs(pick, intraday) {
 
 export function isPickEnterable(pick, nowMs = Date.now()) {
   if (!pick || pick.status !== 'ACTIVE') return false;
-  if (pick.hours_until_close != null && Number(pick.hours_until_close) <= 0) return false;
   const nowSec = Math.floor(nowMs / 1000);
   if (pick.entry_window_close != null && Number(pick.entry_window_close) <= nowSec) return false;
   return true;

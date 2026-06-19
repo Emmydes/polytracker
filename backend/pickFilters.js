@@ -1,8 +1,7 @@
-/** Active picks the user can still enter (shown on Swing / Daily dashboards). */
+/** Active picks shown on Swing / Daily dashboards. */
 export function isPickEnterable(pick, nowSec = Math.floor(Date.now() / 1000)) {
   if (!pick) return false;
   if (pick.status !== 'ACTIVE') return false;
-  if (pick.hours_until_close != null && Number(pick.hours_until_close) <= 0) return false;
   if (pick.entry_window_close != null && Number(pick.entry_window_close) <= nowSec) return false;
   return true;
 }

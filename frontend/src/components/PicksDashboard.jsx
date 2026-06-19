@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { enrichPick, getCategoryLabel, pickMatchesFilter } from '../utils/categories.js';
-import { formatDisplayDate, isPickEnterable } from '../utils/signalFormat.js';
+import { formatDisplayDate } from '../utils/signalFormat.js';
 import CategoryFilter from './CategoryFilter.jsx';
 import SignalCard from './SignalCard.jsx';
 import SkeletonCard from './SkeletonCard.jsx';
@@ -58,10 +58,7 @@ export default function PicksDashboard({
   const activeFilter = searchParams.get('filter') || 'all';
   const [expandedId, setExpandedId] = useState(null);
 
-  const enrichedPicks = useMemo(
-    () => picks.map(enrichPick).filter((p) => isPickEnterable(p)),
-    [picks]
-  );
+  const enrichedPicks = useMemo(() => picks.map(enrichPick), [picks]);
   const activeCount = enrichedPicks.filter((p) => p.status !== 'EXPIRED').length;
   const historyMap = useMemo(() => buildHistoryMap(historyDays), [historyDays]);
 
@@ -126,11 +123,9 @@ export default function PicksDashboard({
       ) : enrichedPicks.length === 0 ? (
         <div className="text-center py-16 bg-card border border-border rounded-[12px]">
           <RefreshIcon />
-          <p className="text-gray-400 mb-1">No active signals today.</p>
+          <p className="text-gray-400 mb-1">No active signals right now.</p>
           <p className="text-gray-500 text-sm">
-            {activeWalletCount === 0
-              ? 'Initial scan running — signals appear as wallets are qualified. Refresh uses cached data only.'
-              : 'Quick refresh — updates signals from already-scanned wallets in a few seconds.'}
+            Click refresh now to update signals from tracked elite wallets.
           </p>
         </div>
       ) : filteredPicks.length === 0 ? (
