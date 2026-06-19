@@ -7,3 +7,5 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: BOOTSTRAP_DISCOVERY_LIMIT
+        value: "60"

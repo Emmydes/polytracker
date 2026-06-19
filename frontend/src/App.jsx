@@ -47,7 +47,9 @@ function BootstrapBanner({ phase }) {
       <div>
         <p className="font-medium text-gray-100">Initial setup in progress</p>
         <p className="text-gray-400 mt-0.5">{phase}</p>
-        <p className="text-gray-500 text-xs mt-1">Signals appear automatically when the scan finishes.</p>
+        <p className="text-gray-500 text-xs mt-1">
+          Scanning top leaderboard traders only on first deploy — usually 2–4 minutes.
+        </p>
       </div>
     </div>
   );

@@ -167,7 +167,14 @@ function formatTraderResult(cached, meta = {}) {
 }
 
 export async function runTraderDiscovery(options = {}) {
-  const { limit = 200, forceRefresh = true, onProgress = null } = options;
+  const {
+    limit = 200,
+    forceRefresh = true,
+    onProgress = null,
+    holderMarketCount = 25,
+    holdersPerMarket = 15,
+    maxEvaluate = null,
+  } = options;
   const leaderboard = await fetchLeaderboard(limit);
 
   const leaderboardMap = new Map();
@@ -176,11 +183,19 @@ export async function runTraderDiscovery(options = {}) {
     if (address) leaderboardMap.set(address.toLowerCase(), entry);
   }
 
-  console.log('Fetching holder wallets from top liquid markets...');
-  const holderWallets = await fetchTopHolderWallets(25, 15);
-  console.log(`Found ${holderWallets.length} unique holder wallets to evaluate`);
+  let holderWallets = [];
+  if (holderMarketCount > 0 && holdersPerMarket > 0) {
+    console.log('Fetching holder wallets from top liquid markets...');
+    holderWallets = await fetchTopHolderWallets(holderMarketCount, holdersPerMarket);
+    console.log(`Found ${holderWallets.length} unique holder wallets to evaluate`);
+  }
 
-  const addressesToEvaluate = [...new Set([...leaderboardMap.keys(), ...holderWallets])];
+  let addressesToEvaluate = [...new Set([...leaderboardMap.keys(), ...holderWallets])];
+  if (maxEvaluate != null && maxEvaluate > 0 && addressesToEvaluate.length > maxEvaluate) {
+    addressesToEvaluate = addressesToEvaluate.slice(0, maxEvaluate);
+  }
+
+  console.log(`Evaluating ${addressesToEvaluate.length} wallets (leaderboard ${leaderboardMap.size}, holders ${holderWallets.length})`);
 
   let evaluated = 0;
   let qualified = 0;
