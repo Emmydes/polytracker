@@ -1,0 +1,16 @@
+---
+description: Auto-commit and push changes to GitHub after every fix or edit
+alwaysApply: true
+---
+
+# Auto-push to GitHub
+
+After completing any code changes in this repo:
+
+1. Run `git status` — if there are changes, commit and push.
+2. Commit message: short sentence describing **why**.
+3. Never commit `.env`, credentials, `*.db`, or secrets.
+4. Push to `origin` on the current branch (`git push origin HEAD`).
+5. Do this at the end of every implementation turn without asking first.
+
+If push fails, report the error and retry once.
