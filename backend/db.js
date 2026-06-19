@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { filterEnterablePicks } from './pickFilters.js';
@@ -8,8 +9,21 @@ const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'polytracker.d
 
 let db;
 
+function ensureDbDirectory() {
+  const dir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`Created database directory: ${dir}`);
+  }
+}
+
+export function getDbPath() {
+  return DB_PATH;
+}
+
 export function getDb() {
   if (!db) {
+    ensureDbDirectory();
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     initSchema(db);

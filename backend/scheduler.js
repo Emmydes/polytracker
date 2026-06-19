@@ -2,12 +2,21 @@ import cron from 'node-cron';
 import { runTraderDiscovery } from './traderScorer.js';
 import { runPicksRefresh, generateDailyPicks, generateIntradayPicks } from './recommender.js';
 import { sendDailyPicksAlert } from './telegram.js';
-import { setMeta, getMeta, getActiveWalletCount, getActiveTrackedWallets } from './db.js';
+import {
+  setMeta,
+  getMeta,
+  getActiveWalletCount,
+  getActiveTrackedWallets,
+  getTodaysPicks,
+  getTodaysIntradayPicks,
+  getDbPath,
+} from './db.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
 import {
   runInitialBootstrap,
   maybeStartBackgroundDiscovery,
   refreshSignalsFromCache,
+  getDiscoveryState,
 } from './discoveryWorker.js';
 
 let refreshState = {
@@ -22,7 +31,12 @@ let refreshState = {
 let bootstrapState = {
   running: false,
   error: null,
+  complete: false,
 };
+
+export function getBootstrapState() {
+  return { ...bootstrapState };
+}
 
 export function getManualRefreshState() {
   if (refreshState.running) {
@@ -105,22 +119,22 @@ export function startScheduler() {
 
 export async function bootstrapIfEmpty() {
   const tracked = getActiveTrackedWallets().length;
-  const picksCount = Number(getMeta('last_picks_count') || 0);
-  const intradayCount = Number(getMeta('last_intraday_count') || 0);
-  const hasPicks = picksCount > 0 || intradayCount > 0;
 
-  if (tracked > 0 && hasPicks) {
-    console.log(`Bootstrap skipped: ${tracked} wallets, ${picksCount} swing / ${intradayCount} daily`);
-    maybeStartBackgroundDiscovery();
-    return;
-  }
-
-  if (tracked > 0 && !hasPicks) {
-    console.log(`Bootstrap: ${tracked} wallets cached — generating signals`);
+  if (tracked > 0) {
+    console.log(`Startup: ${tracked} cached wallets — refreshing signals immediately`);
+    bootstrapState = { running: true, error: null, complete: false };
     try {
       await refreshSignalsFromCache('startup');
+      setMeta('bootstrap_complete', 'true');
+      bootstrapState.complete = true;
+      const swing = getTodaysPicks().length;
+      const daily = getTodaysIntradayPicks().length;
+      console.log(`Startup signals ready: ${swing} swing, ${daily} daily`);
     } catch (err) {
+      bootstrapState.error = err.message;
       console.error('Startup picks refresh failed:', err.message);
+    } finally {
+      bootstrapState.running = false;
     }
     maybeStartBackgroundDiscovery();
     return;
@@ -128,17 +142,36 @@ export async function bootstrapIfEmpty() {
 
   if (bootstrapState.running) return;
 
-  bootstrapState = { running: true, error: null };
+  bootstrapState = { running: true, error: null, complete: false };
   console.log('Bootstrap: loading traders and generating first signals…');
 
   try {
     await runInitialBootstrap();
-    console.log('Bootstrap complete');
+    bootstrapState.complete = true;
+    setMeta('bootstrap_complete', 'true');
+    const swing = getTodaysPicks().length;
+    const daily = getTodaysIntradayPicks().length;
+    console.log(`Bootstrap complete: ${swing} swing, ${daily} daily`);
   } catch (err) {
     bootstrapState.error = err.message;
     console.error('Bootstrap failed:', err.message);
+    if (getActiveTrackedWallets().length > 0) {
+      try {
+        await refreshSignalsFromCache('bootstrap recovery');
+        setMeta('bootstrap_complete', 'true');
+        bootstrapState.complete = true;
+        console.log('Bootstrap recovery: generated signals from partial wallet scan');
+      } catch (recoveryErr) {
+        bootstrapState.error = recoveryErr.message;
+        console.error('Bootstrap recovery failed:', recoveryErr.message);
+      }
+    }
   } finally {
-    bootstrapState = { running: false, error: bootstrapState.error };
+    bootstrapState = {
+      running: false,
+      error: bootstrapState.error,
+      complete: bootstrapState.complete || getMeta('bootstrap_complete') === 'true',
+    };
     maybeStartBackgroundDiscovery();
   }
 }
@@ -236,5 +269,39 @@ export function getLastUpdated() {
     intradayCount: getMeta('last_intraday_count'),
     activeWalletCount: getActiveWalletCount(),
     refresh: getRefreshState(),
+  };
+}
+
+export function getAppStatus() {
+  const lastUpdated = getLastUpdated();
+  const bootstrap = getBootstrapState();
+  const discovery = getDiscoveryState();
+  const enterableSwing = getTodaysPicks().length;
+  const enterableDaily = getTodaysIntradayPicks().length;
+  const walletCount = getActiveWalletCount();
+  const trackedCount = getActiveTrackedWallets().length;
+  const bootstrapComplete =
+    getMeta('bootstrap_complete') === 'true' ||
+    (!bootstrap.running && trackedCount > 0 && (enterableSwing > 0 || enterableDaily > 0));
+
+  return {
+    ...lastUpdated,
+    bootstrapComplete,
+    bootstrapRunning: bootstrap.running,
+    walletCount,
+    trackedWalletCount: trackedCount,
+    enterableSwingCount: enterableSwing,
+    enterableDailyCount: enterableDaily,
+    lastError: bootstrap.error || discovery.error || null,
+    databasePath: getDbPath(),
+    skipBackgroundDiscovery: process.env.SKIP_BACKGROUND_DISCOVERY === 'true',
+    discovery: discovery.running
+      ? {
+          phase: discovery.phase,
+          evaluated: discovery.evaluated,
+          total: discovery.total,
+          qualified: discovery.qualified,
+        }
+      : null,
   };
 }

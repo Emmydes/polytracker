@@ -14,8 +14,12 @@ services:
       - key: DATABASE_PATH
         value: /var/data/polytracker.db
       - key: BOOTSTRAP_DISCOVERY_LIMIT
-        value: "100"
+        value: "60"
+      - key: BOOTSTRAP_BATCH_SIZE
+        value: "12"
       - key: SKIP_BACKGROUND_DISCOVERY
         value: "true"
       - key: DISCOVERY_LEADERBOARD_LIMIT
         value: "100"
+      - key: DISCOVERY_BATCH_SIZE
+        value: "12"

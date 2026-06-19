@@ -16,7 +16,15 @@ import {
   getDailySignalHistory,
   getResolvedSignals,
 } from './db.js';
-import { startScheduler, runManualRefreshAsync, getLastUpdated, getRefreshState, getManualRefreshState, bootstrapIfEmpty } from './scheduler.js';
+import {
+  startScheduler,
+  runManualRefreshAsync,
+  getAppStatus,
+  getLastUpdated,
+  getRefreshState,
+  getManualRefreshState,
+  bootstrapIfEmpty,
+} from './scheduler.js';
 import { isTelegramConfigured } from './telegram.js';
 import { fetchMarketByConditionId } from './polymarketApi.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
@@ -127,7 +135,7 @@ app.get('/api/market/:id', async (req, res) => {
 });
 
 app.get('/api/status', (_req, res) => {
-  res.json(getLastUpdated());
+  res.json(getAppStatus());
 });
 
 app.get('/api/refresh/status', (_req, res) => {
