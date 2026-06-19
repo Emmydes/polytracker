@@ -60,6 +60,8 @@ export function formatShortDate(dateStr) {
 }
 
 export function getEntryWindowEndMs(pick, intraday) {
+  if (pick.status === 'EXPIRED' || pick.status === 'WON' || pick.status === 'LOST') return 0;
+  if (pick.hours_until_close != null && Number(pick.hours_until_close) <= 0) return 0;
   if (pick.entry_window_close) return pick.entry_window_close * 1000;
   const created = (pick.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
   const defaultHours = intraday ? 12 : 24;

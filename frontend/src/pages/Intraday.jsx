@@ -73,6 +73,7 @@ export default function Intraday({ onRefresh, refreshing, refreshPhase }) {
         intraday
         historyDays={history}
         totalTrackedWallets={lastUpdated?.activeWalletCount ?? 0}
+        activeWalletCount={lastUpdated?.activeWalletCount ?? 0}
         headerExtra={
           lastUpdated?.intraday ? (
             <p className="text-gray-500 text-xs">Last updated: {formatTimestamp(lastUpdated.intraday)}</p>

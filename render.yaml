@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: polytracker
+    runtime: node
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm start --prefix backend
+    envVars:
+      - key: NODE_ENV
+        value: production

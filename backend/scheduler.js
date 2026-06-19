@@ -11,9 +11,26 @@ let refreshState = {
   startedAt: null,
   error: null,
   results: null,
+  source: null,
+};
+
+let bootstrapState = {
+  running: false,
+  phase: null,
+  error: null,
 };
 
 export function getRefreshState() {
+  if (bootstrapState.running) {
+    return {
+      running: true,
+      phase: bootstrapState.phase ?? 'Initial setup (first deploy may take 5–10 min)…',
+      startedAt: null,
+      error: bootstrapState.error,
+      results: null,
+      source: 'bootstrap',
+    };
+  }
   return { ...refreshState };
 }
 
@@ -77,12 +94,35 @@ export async function bootstrapIfEmpty() {
     return;
   }
 
+  if (bootstrapState.running) return;
+
+  bootstrapState = { running: true, phase: 'Starting initial wallet discovery…', error: null };
   console.log('Bootstrap: running initial discovery + picks (DB empty or stale)...');
+
   try {
-    await runManualRefresh('all');
+    bootstrapState.phase = 'Discovering elite traders (several minutes)…';
+    const discovery = await runTraderDiscovery({ limit: 200, forceRefresh: true });
+    setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
+    setMeta('last_discovery_evaluated', String(discovery.evaluated));
+    setMeta('last_discovery_qualified', String(discovery.qualified));
+    console.log(`Bootstrap discovery: ${discovery.qualified}/${discovery.evaluated} qualified`);
+
+    bootstrapState.phase = 'Generating swing + daily signals…';
+    await runSignalLifecycle();
+    const batch = await runPicksRefresh(['swing', 'intraday'], {
+      quick: true,
+      finalPriceCheck: true,
+    });
+    setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
+    setMeta('last_picks_count', String(batch.swing?.length ?? 0));
+    setMeta('last_intraday_count', String(batch.intraday?.length ?? 0));
+    console.log(`Bootstrap picks: ${batch.swing?.length ?? 0} swing, ${batch.intraday?.length ?? 0} daily`);
     console.log('Bootstrap complete');
   } catch (err) {
+    bootstrapState.error = err.message;
     console.error('Bootstrap failed:', err.message);
+  } finally {
+    bootstrapState = { running: false, phase: null, error: bootstrapState.error };
   }
 }
 
@@ -97,6 +137,7 @@ export async function runManualRefresh(type = 'all') {
     startedAt: Date.now(),
     error: null,
     results: null,
+    source: 'manual',
   };
 
   const results = {};
@@ -175,7 +216,7 @@ export async function runManualRefresh(type = 'all') {
 }
 
 export function runManualRefreshAsync(type = 'all') {
-  if (refreshState.running) return false;
+  if (bootstrapState.running || refreshState.running) return false;
   runManualRefresh(type).catch((err) => {
     console.error('Background refresh failed:', err.message);
   });

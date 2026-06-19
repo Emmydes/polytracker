@@ -52,6 +52,7 @@ export default function PicksDashboard({
   historyDays = [],
   totalTrackedWallets = 0,
   headerExtra = null,
+  activeWalletCount = null,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeFilter = searchParams.get('filter') || 'all';
@@ -123,7 +124,11 @@ export default function PicksDashboard({
         <div className="text-center py-16 bg-card border border-border rounded-[12px]">
           <RefreshIcon />
           <p className="text-gray-400 mb-1">No active signals today.</p>
-          <p className="text-gray-500 text-sm">Click refresh now to scan tracked wallets.</p>
+          <p className="text-gray-500 text-sm">
+            {activeWalletCount === 0
+              ? 'First deploy? Initial wallet scan runs automatically — wait 5–10 min then refresh.'
+              : 'Click refresh now to scan tracked wallets.'}
+          </p>
         </div>
       ) : filteredPicks.length === 0 ? (
         <div className="text-center py-16 bg-card border border-border rounded-[12px]">

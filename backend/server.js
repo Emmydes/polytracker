@@ -14,10 +14,12 @@ import {
   getLatestPicksDate,
   getSwingSignalStats,
   getDailySignalHistory,
+  getResolvedSignals,
 } from './db.js';
 import { startScheduler, runManualRefreshAsync, getLastUpdated, getRefreshState, bootstrapIfEmpty } from './scheduler.js';
 import { isTelegramConfigured } from './telegram.js';
 import { fetchMarketByConditionId } from './polymarketApi.js';
+import { runSignalLifecycle } from './signalLifecycle.js';
 
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
 
@@ -34,8 +36,9 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', telegram: isTelegramConfigured() });
 });
 
-app.get('/api/picks', (req, res) => {
+app.get('/api/picks', async (req, res) => {
   try {
+    await runSignalLifecycle();
     const date = req.query.date || getLatestPicksDate() || new Date().toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     const picks =
@@ -50,8 +53,9 @@ app.get('/api/picks', (req, res) => {
   }
 });
 
-app.get('/api/picks/intraday', (req, res) => {
+app.get('/api/picks/intraday', async (req, res) => {
   try {
+    await runSignalLifecycle();
     const date = req.query.date || getLatestIntradayDate() || new Date().toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     const picks =
@@ -81,6 +85,20 @@ app.get('/api/signals/daily/history', (req, res) => {
   try {
     const days = Math.min(Number(req.query.days) || 3, 7);
     res.json(getDailySignalHistory(days));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/signals/resolved', async (req, res) => {
+  try {
+    await runSignalLifecycle();
+    const horizon = req.query.horizon || 'all';
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    res.json({
+      signals: getResolvedSignals(horizon, limit),
+      lastUpdated: getLastUpdated(),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -117,9 +135,19 @@ app.get('/api/refresh/status', (_req, res) => {
 
 app.post('/api/refresh', (req, res) => {
   const type = req.body?.type || 'all';
+  const state = getRefreshState();
+  if (state.running) {
+    return res.status(202).json({
+      accepted: true,
+      alreadyRunning: true,
+      message: 'Scan already in progress. Poll /api/refresh/status for progress.',
+      type,
+      ...state,
+    });
+  }
   const started = runManualRefreshAsync(type);
   if (!started) {
-    return res.status(429).json({ error: 'Refresh already in progress', ...getRefreshState() });
+    return res.status(429).json({ error: 'Refresh could not start', ...getRefreshState() });
   }
   res.status(202).json({
     accepted: true,

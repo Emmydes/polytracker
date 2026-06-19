@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import Home from './pages/Home.jsx';
 import Intraday from './pages/Intraday.jsx';
+import Results from './pages/Results.jsx';
 import MarketDetail from './pages/MarketDetail.jsx';
 
 const navClass = ({ isActive }) =>
@@ -9,8 +10,7 @@ const navClass = ({ isActive }) =>
     isActive ? 'bg-accent text-white' : 'text-gray-400 hover:text-white hover:bg-navy'
   }`;
 
-async function pollRefreshStatus(onProgress) {
-  const maxWait = 5 * 60 * 1000;
+async function pollRefreshStatus(onProgress, maxWait = 10 * 60 * 1000) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
@@ -49,22 +49,29 @@ export default function App() {
         body: JSON.stringify({ type: refreshType }),
       });
       const data = await res.json();
+
+      if (res.status === 202 && (data.accepted || data.alreadyRunning)) {
+        const label =
+          data.alreadyRunning || data.source === 'bootstrap'
+            ? data.phase || 'Initial scan in progress…'
+            : refreshType === 'all'
+              ? 'Full scan (first run)…'
+              : refreshType === 'intraday'
+                ? 'Updating daily signals…'
+                : 'Updating swing signals…';
+        setRefreshPhase(label);
+
+        const maxWait = refreshType === 'all' ? 15 * 60 * 1000 : 10 * 60 * 1000;
+        const results = await pollRefreshStatus(setRefreshPhase, maxWait);
+        const parts = [];
+        if (results?.picksCount != null) parts.push(`${results.picksCount} swing`);
+        if (results?.intradayCount != null) parts.push(`${results.intradayCount} daily`);
+        if (parts.length) setRefreshPhase(`Done — ${parts.join(', ')}`);
+        else setRefreshPhase('Done');
+        return;
+      }
+
       if (!res.ok) throw new Error(data.error || 'Refresh failed to start');
-
-      const label =
-        refreshType === 'all'
-          ? 'Full scan (first run)…'
-          : refreshType === 'intraday'
-            ? 'Updating daily signals…'
-            : 'Updating swing signals…';
-      setRefreshPhase(label);
-
-      const results = await pollRefreshStatus(setRefreshPhase);
-      const parts = [];
-      if (results?.picksCount != null) parts.push(`${results.picksCount} swing`);
-      if (results?.intradayCount != null) parts.push(`${results.intradayCount} daily`);
-      if (parts.length) setRefreshPhase(`Done — ${parts.join(', ')}`);
-      else setRefreshPhase('Done');
     } catch (err) {
       setRefreshPhase(err.message);
     } finally {
@@ -92,6 +99,9 @@ export default function App() {
             <NavLink to="/today" className={navClass}>
               Daily (24h)
             </NavLink>
+            <NavLink to="/results" className={navClass}>
+              Results
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -110,6 +120,7 @@ export default function App() {
               <Intraday onRefresh={handleRefresh} refreshing={refreshing} refreshPhase={refreshPhase} />
             }
           />
+          <Route path="/results" element={<Results />} />
           <Route path="/market/:id" element={<MarketDetail />} />
         </Routes>
       </main>

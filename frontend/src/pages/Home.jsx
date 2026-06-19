@@ -108,6 +108,7 @@ export default function Home({ onRefresh, refreshing, refreshPhase }) {
         intraday={false}
         historyDays={historyDays}
         totalTrackedWallets={lastUpdated?.activeWalletCount ?? 0}
+        activeWalletCount={lastUpdated?.activeWalletCount ?? 0}
         headerExtra={
           lastUpdated?.picks ? (
             <p className="text-gray-500 text-xs">Last updated: {formatTimestamp(lastUpdated.picks)}</p>

@@ -313,7 +313,7 @@ export function getActiveSwingSignals() {
 export function updateSwingSignal(id, fields) {
   const allowed = [
     'status', 'entry_window_close', 'current_price', 'drift_pct',
-    'outcome', 'resolved_at',
+    'outcome', 'resolved_at', 'hours_until_close',
   ];
   const sets = [];
   const params = { id };
@@ -507,7 +507,7 @@ export function getActiveDailySignals() {
 export function updateDailySignal(id, fields) {
   const allowed = [
     'status', 'entry_window_close', 'current_price', 'drift_pct',
-    'outcome', 'resolved_at',
+    'outcome', 'resolved_at', 'hours_until_close',
   ];
   const sets = [];
   const params = { id };
@@ -537,7 +537,40 @@ export function getTodaysIntradayPicks() {
     const latest = getLatestIntradayDate();
     if (latest) picks = getIntradayPicks(latest, true);
   }
-  return picks;
+  return picks.filter((p) => p.hours_until_close == null || Number(p.hours_until_close) > 0);
+}
+
+export function getResolvedSignals(horizon = 'all', limit = 50) {
+  const out = [];
+
+  if (horizon === 'all' || horizon === 'swing') {
+    out.push(
+      ...getDb()
+        .prepare(`
+          SELECT *, 'swing' AS horizon FROM daily_picks
+          WHERE status IN ('WON', 'LOST', 'EXPIRED')
+          ORDER BY COALESCE(resolved_at, created_at) DESC
+          LIMIT ?
+        `)
+        .all(limit)
+    );
+  }
+
+  if (horizon === 'all' || horizon === 'intraday' || horizon === 'daily') {
+    out.push(
+      ...getDb()
+        .prepare(`
+          SELECT *, 'intraday' AS horizon FROM intraday_picks
+          WHERE status IN ('WON', 'LOST', 'EXPIRED')
+          ORDER BY COALESCE(resolved_at, created_at) DESC
+          LIMIT ?
+        `)
+        .all(limit)
+    );
+  }
+
+  out.sort((a, b) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0));
+  return out.slice(0, limit);
 }
 
 export function getDailySignalHistory(days = 3) {
