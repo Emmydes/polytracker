@@ -166,6 +166,82 @@ function formatTraderResult(cached, meta = {}) {
   };
 }
 
+export async function buildDiscoveryQueue(options = {}) {
+  const {
+    leaderboardLimit = 100,
+    holderMarketCount = 25,
+    holdersPerMarket = 15,
+  } = options;
+
+  const leaderboard = await fetchLeaderboard(leaderboardLimit);
+  const leaderboardMap = new Map();
+  for (const entry of leaderboard) {
+    const address = extractWalletAddress(entry);
+    if (address) leaderboardMap.set(address.toLowerCase(), entry);
+  }
+
+  let holderWallets = [];
+  if (holderMarketCount > 0 && holdersPerMarket > 0) {
+    console.log('Building discovery queue: fetching holder wallets…');
+    holderWallets = await fetchTopHolderWallets(holderMarketCount, holdersPerMarket);
+    console.log(`Discovery queue: ${holderWallets.length} holder wallets`);
+  }
+
+  const addresses = [...new Set([...leaderboardMap.keys(), ...holderWallets])];
+  console.log(`Discovery queue: ${addresses.length} total (leaderboard ${leaderboardMap.size})`);
+  return { addresses, leaderboardMap };
+}
+
+export async function evaluateWalletBatch(queue, startIndex, batchSize, options = {}) {
+  const { forceRefresh = true, onProgress = null } = options;
+  const { addresses, leaderboardMap } = queue;
+  const slice = addresses.slice(startIndex, startIndex + batchSize);
+
+  let evaluated = 0;
+  let qualified = 0;
+  let newQualified = 0;
+  let degraded = 0;
+
+  for (const addressKey of slice) {
+    const entry = leaderboardMap.get(addressKey);
+    const address = entry ? extractWalletAddress(entry) : addressKey;
+
+    evaluated++;
+    if (onProgress && (evaluated % 2 === 0 || evaluated === slice.length)) {
+      onProgress({ evaluated, total: slice.length, qualified: newQualified });
+    }
+
+    try {
+      const result = await evaluateTrader(address, {
+        forceRefresh,
+        leaderboardEntry: entry ?? { pnl: 0 },
+      });
+
+      if (result.walletStatus === 'DEGRADED') degraded++;
+
+      if (result.qualified && result.walletStatus === 'ACTIVE') {
+        upsertEliteTrader({
+          address: result.address,
+          win_rate: result.win_rate,
+          total_profit: result.total_profit,
+          total_trades: result.total_trades,
+          resolved_trades: result.resolved_trades,
+          trading_days_30: result.trading_days_30,
+          last_10_win_rate: result.last_10_win_rate,
+          is_cooling_off: result.is_cooling_off,
+          last_fetched: result.last_fetched,
+        });
+        qualified++;
+        newQualified++;
+      }
+    } catch (err) {
+      console.error(`Failed to evaluate ${address}:`, err.message);
+    }
+  }
+
+  return { evaluated, qualified, newQualified, degraded, batchSize: slice.length };
+}
+
 export async function runTraderDiscovery(options = {}) {
   const {
     limit = 200,

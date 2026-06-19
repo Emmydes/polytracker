@@ -4,6 +4,11 @@ import { runPicksRefresh, generateDailyPicks, generateIntradayPicks } from './re
 import { sendDailyPicksAlert } from './telegram.js';
 import { setMeta, getMeta, getActiveWalletCount } from './db.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
+import {
+  runInitialBootstrap,
+  startBackgroundDiscovery,
+  getDiscoveryState,
+} from './discoveryWorker.js';
 
 let refreshState = {
   running: false,
@@ -20,20 +25,23 @@ let bootstrapState = {
   error: null,
 };
 
-function getDiscoveryOptions(onProgress) {
-  const isRender = Boolean(process.env.RENDER);
-  const discoveryLimit = Number(process.env.BOOTSTRAP_DISCOVERY_LIMIT) || (isRender ? 60 : 120);
+export function getManualRefreshState() {
+  if (refreshState.running) {
+    return { ...refreshState };
+  }
   return {
-    limit: discoveryLimit,
-    forceRefresh: true,
-    holderMarketCount: isRender ? 0 : 8,
-    holdersPerMarket: isRender ? 0 : 8,
-    maxEvaluate: discoveryLimit,
-    onProgress,
+    running: false,
+    phase: null,
+    error: refreshState.error,
+    results: refreshState.results,
+    source: null,
   };
 }
 
 export function getRefreshState() {
+  if (refreshState.running) {
+    return { ...refreshState };
+  }
   if (bootstrapState.running) {
     return {
       running: true,
@@ -42,6 +50,20 @@ export function getRefreshState() {
       error: bootstrapState.error,
       results: null,
       source: 'bootstrap',
+    };
+  }
+  const discovery = getDiscoveryState();
+  if (discovery.running) {
+    return {
+      running: true,
+      phase: discovery.phase,
+      startedAt: null,
+      error: discovery.error,
+      results: null,
+      source: 'discovery',
+      evaluated: discovery.evaluated,
+      total: discovery.total,
+      qualified: discovery.qualified,
     };
   }
   return { ...refreshState };
@@ -102,58 +124,40 @@ export function startScheduler() {
 export async function bootstrapIfEmpty() {
   const walletCount = getActiveWalletCount();
   const picksCount = getMeta('last_picks_count');
-  if (walletCount > 0 && picksCount && Number(picksCount) > 0) {
+  const discoveryIndex = Number(getMeta('discovery_next_index') || 0);
+  if (walletCount > 0 && picksCount && Number(picksCount) > 0 && discoveryIndex > 0) {
     console.log(`Bootstrap skipped: ${walletCount} active wallets, ${picksCount} picks cached`);
+    startBackgroundDiscovery();
     return;
   }
 
   if (bootstrapState.running) return;
 
-  const discoveryOpts = getDiscoveryOptions(({ evaluated, total, qualified }) => {
-    bootstrapState.phase = `Scanning wallets… ${evaluated}/${total} (${qualified} qualified)`;
-  });
-  const isRender = Boolean(process.env.RENDER);
-
   bootstrapState = { running: true, phase: 'Starting wallet scan…', error: null };
-  console.log(
-    `Bootstrap: evaluating up to ${discoveryOpts.maxEvaluate} wallets${isRender ? ' (Render fast mode)' : ''}...`
-  );
+  console.log('Bootstrap: quick initial scan then background discovery…');
 
   try {
-    bootstrapState.phase = `Scanning wallets… 0/${discoveryOpts.maxEvaluate}`;
-    const discovery = await runTraderDiscovery(discoveryOpts);
-    setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
-    setMeta('last_discovery_evaluated', String(discovery.evaluated));
-    setMeta('last_discovery_qualified', String(discovery.qualified));
-    console.log(`Bootstrap discovery: ${discovery.qualified}/${discovery.evaluated} qualified`);
-
-    bootstrapState.phase = 'Generating signals…';
-    await runSignalLifecycle();
-    const batch = await runPicksRefresh(['swing', 'intraday'], {
-      quick: true,
-      finalPriceCheck: true,
+    await runInitialBootstrap((phase) => {
+      bootstrapState.phase = phase;
     });
-    setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
-    setMeta('last_picks_count', String(batch.swing?.length ?? 0));
-    setMeta('last_intraday_count', String(batch.intraday?.length ?? 0));
-    console.log(`Bootstrap picks: ${batch.swing?.length ?? 0} swing, ${batch.intraday?.length ?? 0} daily`);
-    console.log('Bootstrap complete');
+    console.log('Bootstrap initial pass complete — starting background discovery');
   } catch (err) {
     bootstrapState.error = err.message;
     console.error('Bootstrap failed:', err.message);
   } finally {
     bootstrapState = { running: false, phase: null, error: bootstrapState.error };
+    startBackgroundDiscovery();
   }
 }
 
-export async function runManualRefresh(type = 'all') {
+export async function runManualRefresh(type = 'swing') {
   if (refreshState.running) {
     throw new Error('Refresh already in progress');
   }
 
   refreshState = {
     running: true,
-    phase: 'starting',
+    phase: 'Updating signals from tracked wallets…',
     startedAt: Date.now(),
     error: null,
     results: null,
@@ -164,37 +168,14 @@ export async function runManualRefresh(type = 'all') {
   const onPhase = (msg) => setPhase(msg);
 
   try {
-    if (type === 'all' || type === 'discovery') {
-      const isRender = Boolean(process.env.RENDER);
-      const discoveryOpts = getDiscoveryOptions(({ evaluated, total, qualified }) => {
-        setPhase(`Scanning wallets… ${evaluated}/${total} (${qualified} qualified)`);
-      });
-      setPhase(`Scanning wallets… 0/${discoveryOpts.maxEvaluate}`);
-      console.log(
-        `Starting trader discovery (up to ${discoveryOpts.maxEvaluate}${isRender ? ', Render fast mode' : ''})...`
-      );
-      results.discovery = await runTraderDiscovery(discoveryOpts);
-      setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
-      setMeta('last_discovery_evaluated', String(results.discovery.evaluated));
-      setMeta('last_discovery_qualified', String(results.discovery.qualified));
-      console.log(`Discovery: ${results.discovery.qualified}/${results.discovery.evaluated} qualified`);
+    if (type === 'discovery' || type === 'all') {
+      type = 'picks';
     }
 
-    if (type === 'all') {
-      setPhase('Generating all picks…');
-      await runSignalLifecycle();
-      const batch = await runPicksRefresh(['swing', 'intraday'], {
-        quick: true,
-        finalPriceCheck: true,
-        onPhase,
-      });
-      results.picks = batch.swing ?? [];
-      results.intraday = batch.intraday ?? [];
-      await sendDailyPicksAlert(results.picks, 'swing');
-      setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
-    } else if (type === 'picks') {
-      setPhase('Generating swing + today picks…');
-      await runSignalLifecycle();
+    await runSignalLifecycle();
+
+    if (type === 'picks') {
+      setPhase('Refreshing swing + daily signals…');
       const batch = await runPicksRefresh(['swing', 'intraday'], {
         quick: true,
         finalPriceCheck: true,
@@ -203,8 +184,10 @@ export async function runManualRefresh(type = 'all') {
       results.picks = batch.swing ?? [];
       results.intraday = batch.intraday ?? [];
       setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
+      setMeta('last_picks_count', String(results.picks.length));
+      setMeta('last_intraday_count', String(results.intraday.length));
     } else if (type === 'swing') {
-      await runSignalLifecycle();
+      setPhase('Refreshing swing signals…');
       const batch = await runPicksRefresh(['swing'], {
         quick: true,
         finalPriceCheck: true,
@@ -212,8 +195,9 @@ export async function runManualRefresh(type = 'all') {
       });
       results.picks = batch.swing ?? [];
       setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
+      setMeta('last_picks_count', String(results.picks.length));
     } else if (type === 'intraday') {
-      await runSignalLifecycle();
+      setPhase('Refreshing daily signals…');
       const batch = await runPicksRefresh(['intraday'], {
         quick: true,
         finalPriceCheck: true,
@@ -221,12 +205,10 @@ export async function runManualRefresh(type = 'all') {
       });
       results.intraday = batch.intraday ?? [];
       setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
+      setMeta('last_intraday_count', String(results.intraday.length));
     }
 
     refreshState.results = {
-      discovery: results.discovery
-        ? { evaluated: results.discovery.evaluated, qualified: results.discovery.qualified }
-        : null,
       picksCount: results.picks?.length ?? null,
       intradayCount: results.intraday?.length ?? null,
     };
@@ -241,8 +223,8 @@ export async function runManualRefresh(type = 'all') {
   }
 }
 
-export function runManualRefreshAsync(type = 'all') {
-  if (bootstrapState.running || refreshState.running) return false;
+export function runManualRefreshAsync(type = 'swing') {
+  if (refreshState.running) return false;
   runManualRefresh(type).catch((err) => {
     console.error('Background refresh failed:', err.message);
   });
@@ -250,16 +232,27 @@ export function runManualRefreshAsync(type = 'all') {
 }
 
 export function getLastUpdated() {
+  const discovery = getDiscoveryState();
   return {
     discovery: getMeta('last_discovery'),
     picks: getMeta('last_picks_generated'),
     manualRefresh: getMeta('last_manual_refresh'),
     discoveryEvaluated: getMeta('last_discovery_evaluated'),
     discoveryQualified: getMeta('last_discovery_qualified'),
+    discoveryQueueTotal: getMeta('discovery_queue_total'),
+    discoveryNextIndex: getMeta('discovery_next_index'),
     picksCount: getMeta('last_picks_count'),
     intraday: getMeta('last_intraday_generated'),
     intradayCount: getMeta('last_intraday_count'),
     activeWalletCount: getActiveWalletCount(),
     refresh: getRefreshState(),
+    backgroundDiscovery: {
+      running: discovery.running,
+      complete: discovery.complete,
+      phase: discovery.phase,
+      evaluated: discovery.evaluated,
+      total: discovery.total,
+      qualified: discovery.qualified,
+    },
   };
 }

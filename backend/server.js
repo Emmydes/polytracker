@@ -16,7 +16,7 @@ import {
   getDailySignalHistory,
   getResolvedSignals,
 } from './db.js';
-import { startScheduler, runManualRefreshAsync, getLastUpdated, getRefreshState, bootstrapIfEmpty } from './scheduler.js';
+import { startScheduler, runManualRefreshAsync, getLastUpdated, getRefreshState, getManualRefreshState, bootstrapIfEmpty } from './scheduler.js';
 import { isTelegramConfigured } from './telegram.js';
 import { fetchMarketByConditionId } from './polymarketApi.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
@@ -131,17 +131,19 @@ app.get('/api/status', (_req, res) => {
 });
 
 app.get('/api/refresh/status', (_req, res) => {
-  res.json(getRefreshState());
+  res.json(getManualRefreshState());
 });
 
 app.post('/api/refresh', (req, res) => {
-  const type = req.body?.type || 'all';
+  let type = req.body?.type || 'swing';
+  if (type === 'all' || type === 'discovery') type = 'picks';
+
   const state = getRefreshState();
-  if (state.running) {
+  if (state.running && state.source === 'manual') {
     return res.status(202).json({
       accepted: true,
       alreadyRunning: true,
-      message: 'Scan already in progress. Poll /api/refresh/status for progress.',
+      message: 'Refresh already in progress.',
       type,
       ...state,
     });
@@ -152,7 +154,7 @@ app.post('/api/refresh', (req, res) => {
   }
   res.status(202).json({
     accepted: true,
-    message: 'Refresh started in background. Poll /api/refresh/status for progress.',
+    message: 'Quick refresh started — using already-scanned wallets.',
     type,
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Route, Routes, useLocation } from 'react-router-dom';
 import Home from './pages/Home.jsx';
 import Intraday from './pages/Intraday.jsx';
@@ -10,11 +10,28 @@ const navClass = ({ isActive }) =>
     isActive ? 'bg-accent text-white' : 'text-gray-400 hover:text-white hover:bg-navy'
   }`;
 
-async function pollRefreshStatus(onProgress, maxWait = 10 * 60 * 1000) {
+async function pollBootstrapStatus(onProgress, maxWait = 8 * 60 * 1000) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
     await new Promise((r) => setTimeout(r, 800));
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    const refresh = data.refresh;
+    if (refresh?.phase) onProgress?.(refresh.phase);
+    if (!refresh?.running || refresh?.source !== 'bootstrap') {
+      if (refresh?.error) throw new Error(refresh.error);
+      return;
+    }
+  }
+  throw new Error('Initial setup timed out — background scan will continue');
+}
+
+async function pollRefreshStatus(onProgress, maxWait = 60 * 1000) {
+  const start = Date.now();
+
+  while (Date.now() - start < maxWait) {
+    await new Promise((r) => setTimeout(r, 400));
     const res = await fetch('/api/refresh/status');
     const status = await res.json();
     if (status.phase) onProgress?.(status.phase);
@@ -26,7 +43,7 @@ async function pollRefreshStatus(onProgress, maxWait = 10 * 60 * 1000) {
   throw new Error('Refresh timed out — try again in a moment');
 }
 
-function BootstrapBanner({ phase }) {
+function SetupBanner({ phase, title, hint }) {
   if (!phase) return null;
 
   return (
@@ -45,10 +62,24 @@ function BootstrapBanner({ phase }) {
         />
       </svg>
       <div>
-        <p className="font-medium text-gray-100">Initial setup in progress</p>
+        <p className="font-medium text-gray-100">{title}</p>
         <p className="text-gray-400 mt-0.5">{phase}</p>
-        <p className="text-gray-500 text-xs mt-1">
-          Scanning top leaderboard traders only on first deploy — usually 2–4 minutes.
+        {hint ? <p className="text-gray-500 text-xs mt-1">{hint}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function DiscoveryBanner({ phase }) {
+  if (!phase) return null;
+
+  return (
+    <div className="mb-6 flex items-center gap-3 p-3 bg-navy/60 border border-border rounded-[12px] text-sm">
+      <span className="w-2 h-2 rounded-full bg-accent animate-pulse shrink-0" />
+      <div>
+        <p className="text-gray-300">{phase}</p>
+        <p className="text-gray-500 text-xs mt-0.5">
+          New signals appear automatically. Refresh now uses already-scanned wallets (a few seconds).
         </p>
       </div>
     </div>
@@ -60,6 +91,9 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshPhase, setRefreshPhase] = useState('');
   const [bootstrapPhase, setBootstrapPhase] = useState('');
+  const [discoveryPhase, setDiscoveryPhase] = useState('');
+  const [signalsVersion, setSignalsVersion] = useState(0);
+  const lastCounts = useRef({ picks: null, intraday: null });
 
   const pollAppStatus = useCallback(async () => {
     try {
@@ -67,11 +101,31 @@ export default function App() {
       if (!res.ok) return;
       const data = await res.json();
       const refresh = data.refresh;
+
       if (refresh?.running && refresh?.source === 'bootstrap') {
         setBootstrapPhase(refresh.phase || 'Starting wallet scan…');
       } else {
         setBootstrapPhase('');
       }
+
+      const bg = data.backgroundDiscovery;
+      if (bg?.running && bg?.phase) {
+        setDiscoveryPhase(bg.phase);
+      } else if (bg?.complete && bg?.phase) {
+        setDiscoveryPhase('');
+      } else {
+        setDiscoveryPhase('');
+      }
+
+      const picks = data.picksCount ?? null;
+      const intraday = data.intradayCount ?? null;
+      if (
+        lastCounts.current.picks !== null &&
+        (lastCounts.current.picks !== picks || lastCounts.current.intraday !== intraday)
+      ) {
+        setSignalsVersion((v) => v + 1);
+      }
+      lastCounts.current = { picks, intraday };
     } catch {
       /* optional */
     }
@@ -79,13 +133,13 @@ export default function App() {
 
   useEffect(() => {
     pollAppStatus();
-    const id = setInterval(pollAppStatus, 2000);
+    const id = setInterval(pollAppStatus, 3000);
     return () => clearInterval(id);
   }, [pollAppStatus]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    setRefreshPhase('Starting…');
+    setRefreshPhase('Refreshing…');
     try {
       const statusRes = await fetch('/api/status');
       const statusData = await statusRes.json();
@@ -94,15 +148,14 @@ export default function App() {
 
       if (refresh?.running && refresh?.source === 'bootstrap') {
         setRefreshPhase(refresh.phase || 'Initial scan in progress…');
-        await pollRefreshStatus(setRefreshPhase, 12 * 60 * 1000);
+        await pollBootstrapStatus(setRefreshPhase, 8 * 60 * 1000);
         setRefreshPhase('Done');
+        setSignalsVersion((v) => v + 1);
         await pollAppStatus();
         return;
       }
 
-      let refreshType = 'intraday';
-      if (!onToday) refreshType = 'swing';
-      if ((statusData.activeWalletCount ?? 0) === 0) refreshType = 'all';
+      const refreshType = onToday ? 'intraday' : 'swing';
 
       const res = await fetch('/api/refresh', {
         method: 'POST',
@@ -112,23 +165,14 @@ export default function App() {
       const data = await res.json();
 
       if (res.status === 202 && (data.accepted || data.alreadyRunning)) {
-        const label =
-          data.alreadyRunning || data.source === 'bootstrap'
-            ? data.phase || 'Scan in progress…'
-            : refreshType === 'all'
-              ? 'Full scan (first run)…'
-              : refreshType === 'intraday'
-                ? 'Updating daily signals…'
-                : 'Updating swing signals…';
-        setRefreshPhase(label);
-
-        const maxWait = refreshType === 'all' ? 15 * 60 * 1000 : 10 * 60 * 1000;
-        const results = await pollRefreshStatus(setRefreshPhase, maxWait);
+        setRefreshPhase(onToday ? 'Updating daily signals…' : 'Updating swing signals…');
+        const results = await pollRefreshStatus(setRefreshPhase, 60 * 1000);
         const parts = [];
         if (results?.picksCount != null) parts.push(`${results.picksCount} swing`);
         if (results?.intradayCount != null) parts.push(`${results.intradayCount} daily`);
         if (parts.length) setRefreshPhase(`Done — ${parts.join(', ')}`);
         else setRefreshPhase('Done');
+        setSignalsVersion((v) => v + 1);
         await pollAppStatus();
         return;
       }
@@ -140,7 +184,7 @@ export default function App() {
       setTimeout(() => {
         setRefreshing(false);
         setRefreshPhase('');
-      }, 1200);
+      }, 800);
     }
   };
 
@@ -171,18 +215,35 @@ export default function App() {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {showBootstrap ? <BootstrapBanner phase={bootstrapPhase} /> : null}
+        {showBootstrap ? (
+          <SetupBanner
+            phase={bootstrapPhase}
+            title="Initial setup in progress"
+            hint="First ~60 wallets scanned for quick signals, then full scan continues in background."
+          />
+        ) : null}
+        {!showBootstrap && discoveryPhase ? <DiscoveryBanner phase={discoveryPhase} /> : null}
         <Routes>
           <Route
             path="/"
             element={
-              <Home onRefresh={handleRefresh} refreshing={refreshing} refreshPhase={refreshPhase} />
+              <Home
+                onRefresh={handleRefresh}
+                refreshing={refreshing}
+                refreshPhase={refreshPhase}
+                signalsVersion={signalsVersion}
+              />
             }
           />
           <Route
             path="/today"
             element={
-              <Intraday onRefresh={handleRefresh} refreshing={refreshing} refreshPhase={refreshPhase} />
+              <Intraday
+                onRefresh={handleRefresh}
+                refreshing={refreshing}
+                refreshPhase={refreshPhase}
+                signalsVersion={signalsVersion}
+              />
             }
           />
           <Route path="/results" element={<Results />} />

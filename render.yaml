@@ -9,3 +9,7 @@ services:
         value: production
       - key: BOOTSTRAP_DISCOVERY_LIMIT
         value: "60"
+      - key: DISCOVERY_BATCH_SIZE
+        value: "12"
+      - key: DISCOVERY_LEADERBOARD_LIMIT
+        value: "100"

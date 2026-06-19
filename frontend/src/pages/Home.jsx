@@ -33,7 +33,7 @@ async function loadSwingHistory() {
   return results.filter((d) => d.signals.length > 0);
 }
 
-export default function Home({ onRefresh, refreshing, refreshPhase }) {
+export default function Home({ onRefresh, refreshing, refreshPhase, signalsVersion = 0 }) {
   const [picks, setPicks] = useState([]);
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(true);
@@ -88,6 +88,13 @@ export default function Home({ onRefresh, refreshing, refreshPhase }) {
     loadStats();
     loadHistory();
   }, [loadPicks, loadStats, loadHistory]);
+
+  useEffect(() => {
+    if (signalsVersion > 0) {
+      loadPicks();
+      loadStats();
+    }
+  }, [signalsVersion, loadPicks, loadStats]);
 
   const handleRefresh = async () => {
     if (onRefresh) await onRefresh();

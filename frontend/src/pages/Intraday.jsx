@@ -9,7 +9,7 @@ function formatTimestamp(ts) {
   return new Date(Number(ts) * 1000).toLocaleString();
 }
 
-export default function Intraday({ onRefresh, refreshing, refreshPhase }) {
+export default function Intraday({ onRefresh, refreshing, refreshPhase, signalsVersion = 0 }) {
   const [picks, setPicks] = useState([]);
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(true);
@@ -54,6 +54,13 @@ export default function Intraday({ onRefresh, refreshing, refreshPhase }) {
     loadPicks();
     loadHistory();
   }, [loadPicks, loadHistory]);
+
+  useEffect(() => {
+    if (signalsVersion > 0) {
+      loadPicks();
+      loadHistory();
+    }
+  }, [signalsVersion, loadPicks, loadHistory]);
 
   const handleRefresh = async () => {
     if (onRefresh) await onRefresh();
