@@ -13,19 +13,5 @@ services:
         value: production
       - key: DATABASE_PATH
         value: /var/data/polytracker.db
-      - key: BOOTSTRAP_DISCOVERY_LIMIT
-        value: "40"
-      - key: BOOTSTRAP_BATCH_SIZE
-        value: "8"
-      - key: BOOTSTRAP_HOLDER_MARKETS
-        value: "12"
-      - key: BOOTSTRAP_HOLDERS_PER_MARKET
-        value: "8"
-      - key: BOOTSTRAP_MAX_EVALUATE
-        value: "120"
       - key: SKIP_BACKGROUND_DISCOVERY
         value: "true"
-      - key: DISCOVERY_LEADERBOARD_LIMIT
-        value: "100"
-      - key: DISCOVERY_BATCH_SIZE
-        value: "12"

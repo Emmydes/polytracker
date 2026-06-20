@@ -1,5 +1,4 @@
 import cron from 'node-cron';
-import { runTraderDiscovery } from './traderScorer.js';
 import { runPicksRefresh, generateDailyPicks, generateIntradayPicks } from './recommender.js';
 import { sendDailyPicksAlert } from './telegram.js';
 import {
@@ -14,11 +13,14 @@ import {
 } from './db.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
 import {
-  runInitialBootstrap,
+  runCuratedStartup,
+  needsFullCuratedRefresh,
   maybeStartBackgroundDiscovery,
   refreshSignalsFromCache,
+  refreshCuratedWallets,
   getDiscoveryState,
 } from './discoveryWorker.js';
+import { isWalletDiscoveryEnabled } from './curatedWallets.js';
 
 let refreshState = {
   running: false,
@@ -71,16 +73,30 @@ function setPhase(phase) {
 }
 
 export function startScheduler() {
-  cron.schedule('0 0 * * *', async () => {
-    console.log('[cron] Starting midnight trader discovery...');
+  if (isWalletDiscoveryEnabled()) {
+    cron.schedule('0 0 * * *', async () => {
+      console.log('[cron] Starting midnight trader discovery...');
+      try {
+        const { runTraderDiscovery } = await import('./traderScorer.js');
+        const result = await runTraderDiscovery({ limit: 200, forceRefresh: true });
+        setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
+        setMeta('last_discovery_evaluated', String(result.evaluated));
+        setMeta('last_discovery_qualified', String(result.qualified));
+        console.log(`[cron] Discovery complete: ${result.qualified}/${result.evaluated} qualified`);
+      } catch (err) {
+        console.error('[cron] Discovery failed:', err.message);
+      }
+    });
+  }
+
+  cron.schedule('0 */6 * * *', async () => {
+    if (isWalletDiscoveryEnabled()) return;
+    console.log('[cron] Refreshing curated wallet positions…');
     try {
-      const result = await runTraderDiscovery({ limit: 200, forceRefresh: true });
-      setMeta('last_discovery', String(Math.floor(Date.now() / 1000)));
-      setMeta('last_discovery_evaluated', String(result.evaluated));
-      setMeta('last_discovery_qualified', String(result.qualified));
-      console.log(`[cron] Discovery complete: ${result.qualified}/${result.evaluated} qualified`);
+      await refreshCuratedWallets();
+      await refreshSignalsFromCache('curated cron');
     } catch (err) {
-      console.error('[cron] Discovery failed:', err.message);
+      console.error('[cron] Curated refresh failed:', err.message);
     }
   });
 
@@ -128,62 +144,44 @@ export function startScheduler() {
     }
   });
 
-  console.log('Scheduler started: discovery @ midnight, swing @ 7AM, intraday @ 8/12/4/8PM, lifecycle every 15m');
+  console.log(
+    isWalletDiscoveryEnabled()
+      ? 'Scheduler started: discovery @ midnight, swing @ 7AM, intraday @ 8/12/4/8PM, lifecycle every 15m'
+      : 'Scheduler started: curated refresh every 6h, swing @ 7AM, intraday @ 8/12/4/8PM, lifecycle every 15m'
+  );
 }
 
 export async function bootstrapIfEmpty() {
-  const { importSeedIfEmpty } = await import('./seedImport.js');
-  const seedResult = importSeedIfEmpty();
-  if (seedResult.imported) {
-    console.log(`Startup: loaded seed (${seedResult.counts.eliteTraders} wallets, ${seedResult.counts.traderPositions} positions)`);
-  }
-
-  const tracked = getActiveTrackedWallets().length;
-
-  if (tracked > 0) {
-    console.log(`Startup: ${tracked} cached wallets — refreshing signals immediately`);
-    bootstrapState = { running: true, error: null, complete: false };
-    try {
-      await refreshSignalsFromCache('startup');
-      setMeta('bootstrap_complete', 'true');
-      bootstrapState.complete = true;
-      const swing = getTodaysPicks().length;
-      const daily = getTodaysIntradayPicks().length;
-      console.log(`Startup signals ready: ${swing} swing, ${daily} daily`);
-    } catch (err) {
-      bootstrapState.error = err.message;
-      console.error('Startup picks refresh failed:', err.message);
-    } finally {
-      bootstrapState.running = false;
-    }
-    maybeStartBackgroundDiscovery();
-    return;
-  }
-
   if (bootstrapState.running) return;
 
   bootstrapState = { running: true, error: null, complete: false };
-  console.log('Bootstrap: loading traders and generating first signals…');
 
   try {
-    await runInitialBootstrap();
+    if (needsFullCuratedRefresh()) {
+      console.log('Startup: loading curated wallets and fetching positions…');
+      await runCuratedStartup((msg) => console.log(`Startup: ${msg}`));
+    } else {
+      const tracked = getActiveTrackedWallets().length;
+      const positions = getDb().prepare('SELECT COUNT(*) AS n FROM trader_positions').get().n;
+      console.log(`Startup: ${tracked} wallets, ${positions} cached positions — refreshing signals`);
+      await refreshSignalsFromCache('startup');
+      setMeta('bootstrap_complete', 'true');
+    }
     bootstrapState.complete = true;
-    setMeta('bootstrap_complete', 'true');
     const swing = getTodaysPicks().length;
     const daily = getTodaysIntradayPicks().length;
-    console.log(`Bootstrap complete: ${swing} swing, ${daily} daily`);
+    const tracked = getActiveTrackedWallets().length;
+    console.log(`Startup complete: ${tracked} wallets, ${swing} swing, ${daily} daily picks`);
   } catch (err) {
     bootstrapState.error = err.message;
-    console.error('Bootstrap failed:', err.message);
+    console.error('Startup failed:', err.message);
     if (getActiveTrackedWallets().length > 0) {
       try {
-        await refreshSignalsFromCache('bootstrap recovery');
+        await refreshSignalsFromCache('startup recovery');
         setMeta('bootstrap_complete', 'true');
         bootstrapState.complete = true;
-        console.log('Bootstrap recovery: generated signals from partial wallet scan');
       } catch (recoveryErr) {
         bootstrapState.error = recoveryErr.message;
-        console.error('Bootstrap recovery failed:', recoveryErr.message);
       }
     }
   } finally {
@@ -220,11 +218,17 @@ export async function runManualRefresh(type = 'swing') {
 
     await runSignalLifecycle();
 
+    if (!isWalletDiscoveryEnabled()) {
+      setPhase('Scanning curated wallet positions…');
+      await refreshCuratedWallets({ onProgress: setPhase });
+    }
+
     if (type === 'picks') {
       setPhase('Refreshing swing + daily signals…');
       const batch = await runPicksRefresh(['swing', 'intraday'], {
         quick: true,
         finalPriceCheck: true,
+        enforceMinimums: true,
         onPhase,
       });
       results.picks = batch.swing ?? [];
@@ -320,6 +324,8 @@ export function getAppStatus() {
     lastError: bootstrap.error || discovery.error || null,
     databasePath: getDbPath(),
     skipBackgroundDiscovery: process.env.SKIP_BACKGROUND_DISCOVERY === 'true',
+    walletDiscoveryEnabled: isWalletDiscoveryEnabled(),
+    curatedMode: !isWalletDiscoveryEnabled(),
     discovery: discovery.running
       ? {
           phase: discovery.phase,

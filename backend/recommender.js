@@ -27,15 +27,18 @@ import {
 
 const MIN_CONSENSUS_SWING = 3;
 const MIN_DAILY_SIGNALS = 3;
+const MIN_SWING_SIGNALS = 1;
 const MIN_DIVERGENCE_START = 0.05;
 const MIN_DIVERGENCE_FLOOR = 0.01;
 const MAX_PORTFOLIO_PCT = 0.4;
 const MIN_LIQUIDITY = 10000;
+const MIN_LIQUIDITY_FLOOR = 2500;
 const MIN_PRICE = 0.01;
 const MAX_PRICE = 0.89;
 const BEST_VALUE_MIN = 0.1;
 const BEST_VALUE_MAX = 0.7;
 const DRIFT_SKIP = 25;
+const DRIFT_SKIP_RELAXED = 40;
 const DRIFT_LATE = 15;
 const COORDINATION_WINDOW_MS = 4 * 60 * 60 * 1000;
 const HOLDERS_PER_MARKET = 30;
@@ -43,11 +46,12 @@ const HOLDERS_PER_MARKET = 30;
 const HORIZONS = {
   swing: {
     label: 'swing',
-    minConsensus: 3,
-    minHoursToClose: 48,
+    minConsensus: 1,
+    minHoursToClose: 25,
     maxHoursToClose: null,
     marketsToScan: 100,
     maxPicks: 5,
+    minSignals: MIN_SWING_SIGNALS,
     fetchMarkets: (n) => fetchActiveMarkets(n),
   },
   intraday: {
@@ -93,7 +97,7 @@ export async function generateIntradayPicks(options = {}) {
 
 /** Load positions once, generate one or more horizon pick sets. */
 export async function runPicksRefresh(horizonKeys, options = {}) {
-  const { quick = false, finalPriceCheck = true, onPhase = null } = options;
+  const { quick = false, finalPriceCheck = true, onPhase = null, enforceMinimums = false } = options;
   const eliteTraders = getActiveTrackedWallets();
 
   if (eliteTraders.length === 0) {
@@ -112,8 +116,9 @@ export async function runPicksRefresh(horizonKeys, options = {}) {
   for (const key of horizonKeys) {
     onPhase?.(key === 'intraday' ? 'Scanning 24h markets…' : 'Scanning swing markets…');
     out[key] = await generatePicksWithContext(key, {
-      quick,
+      quick: true,
       finalPriceCheck,
+      enforceMinimums,
       eliteMap,
       totalTrackedWallets,
       ...positionCtx,
@@ -127,79 +132,134 @@ async function generatePicks(horizonKey, options = {}) {
 }
 
 async function generatePicksWithContext(horizonKey, ctx) {
-  const { quick, finalPriceCheck, eliteMap, totalTrackedWallets, allPositions, portfolioTotals, positionLookup } = ctx;
+  const {
+    quick,
+    finalPriceCheck,
+    enforceMinimums,
+    eliteMap,
+    totalTrackedWallets,
+    allPositions,
+    portfolioTotals,
+    positionLookup,
+  } = ctx;
   const horizon = adaptHorizon(horizonKey, totalTrackedWallets);
   const date = new Date().toISOString().slice(0, 10);
 
-  console.log(`Generating ${horizonKey} picks (quick=${quick})…`);
+  console.log(`Generating ${horizonKey} picks (quick=${quick}, enforceMinimums=${enforceMinimums})…`);
 
-  const markets = await horizon.fetchMarkets(horizon.marketsToScan);
-  console.log(`${horizonKey}: ${markets.length} markets in window`);
+  const filterOpts = { minLiquidity: MIN_LIQUIDITY, driftSkip: DRIFT_SKIP, minHoursToClose: horizon.minHoursToClose };
+  const relaxSteps = [];
 
-  const marketsCache = new Map();
-  for (const m of markets) {
-    const id = m.conditionId ?? m.condition_id;
-    if (id) marketsCache.set(id, m);
-  }
+  const runPass = async (opts) => {
+    const markets = await horizon.fetchMarkets(horizon.marketsToScan);
+    const marketsCache = new Map();
+    for (const m of markets) {
+      const id = m.conditionId ?? m.condition_id;
+      if (id) marketsCache.set(id, m);
+    }
 
-  let marketCandidates = [];
-  const runHolderScan = !quick || totalTrackedWallets < 30;
-  if (runHolderScan) {
-    marketCandidates = await scanMarketHolders(
-      eliteMap,
-      portfolioTotals,
-      positionLookup,
-      date,
-      markets,
-      horizon,
-      { skipPriceHistory: quick, marketsCache, totalTrackedWallets }
-    );
-  }
-
-  const positionCandidates = await scanPositionOverlap(
-    allPositions,
-    portfolioTotals,
-    date,
-    horizon,
-    {
+    const positionCandidates = await scanPositionOverlap(allPositions, portfolioTotals, date, horizon, {
       skipPriceHistory: quick,
       marketsCache,
-      restrictToCached: quick && horizonKey === 'intraday' && totalTrackedWallets >= 30,
+      restrictToCached: false,
       totalTrackedWallets,
-    }
-  );
+      ...opts,
+    });
 
-  const merged = mergeCandidates(marketCandidates, positionCandidates);
-  merged.sort((a, b) => {
+    return { marketsCache, positionCandidates, marketCount: markets.length };
+  };
+
+  let { positionCandidates, marketCount } = await runPass(filterOpts);
+
+  const minRequired = horizon.minSignals ?? (horizonKey === 'intraday' ? MIN_DAILY_SIGNALS : MIN_SWING_SIGNALS);
+  let topPicks = pickTopCandidates(horizonKey, positionCandidates, horizon, minRequired);
+
+  if (topPicks.length < minRequired && enforceMinimums) {
+    const relaxedLiquidity = { ...filterOpts, minLiquidity: MIN_LIQUIDITY_FLOOR };
+    ({ positionCandidates } = await runPass(relaxedLiquidity));
+    topPicks = pickTopCandidates(horizonKey, positionCandidates, horizon, minRequired);
+    if (topPicks.length >= minRequired) relaxSteps.push(`liquidity floor ${MIN_LIQUIDITY_FLOOR}`);
+  }
+
+  if (topPicks.length < minRequired && enforceMinimums) {
+    const relaxedDrift = { ...filterOpts, minLiquidity: MIN_LIQUIDITY_FLOOR, driftSkip: DRIFT_SKIP_RELAXED };
+    ({ positionCandidates } = await runPass(relaxedDrift));
+    topPicks = pickTopCandidates(horizonKey, positionCandidates, { ...horizon, minSoloPositionSize: 50 }, minRequired);
+    if (topPicks.length >= minRequired) relaxSteps.push(`drift cap ${DRIFT_SKIP_RELAXED}%`);
+  }
+
+  if (topPicks.length < minRequired && enforceMinimums && horizonKey === 'swing') {
+    const relaxedHorizon = { ...horizon, minHoursToClose: 24 };
+    ({ positionCandidates } = await runPass({
+      ...filterOpts,
+      minLiquidity: MIN_LIQUIDITY_FLOOR,
+      driftSkip: DRIFT_SKIP_RELAXED,
+      minHoursToClose: 24,
+    }));
+    topPicks = pickTopCandidates(horizonKey, positionCandidates, relaxedHorizon, minRequired);
+    if (topPicks.length >= minRequired) relaxSteps.push('swing horizon 24h (was >24h)');
+  }
+
+  if (topPicks.length < minRequired && enforceMinimums && horizonKey === 'intraday') {
+    const relaxedHours = { ...horizon, maxHoursToClose: 48 };
+    ({ positionCandidates } = await runPass({
+      ...filterOpts,
+      minLiquidity: MIN_LIQUIDITY_FLOOR,
+      driftSkip: DRIFT_SKIP_RELAXED,
+    }));
+    topPicks = pickTopCandidates(horizonKey, positionCandidates, relaxedHours, minRequired, true);
+    if (topPicks.length >= minRequired) relaxSteps.push('daily horizon extended to 48h');
+  }
+
+  if (topPicks.length < minRequired && enforceMinimums) {
+    topPicks = pickTopCandidates(horizonKey, positionCandidates, { ...horizon, minConsensus: 1, minSoloPositionSize: 25 }, minRequired, true);
+    if (topPicks.length > 0) relaxSteps.push('consensus/solo-size floor');
+  }
+
+  if (relaxSteps.length > 0) {
+    console.log(`${horizonKey}: relaxed filters to meet minimum (${minRequired}): ${relaxSteps.join(', ')}`);
+    setMeta(`last_${horizonKey}_relaxations`, relaxSteps.join('; '));
+  }
+
+  console.log(`${horizonKey}: ${marketCount} markets in window, ${positionCandidates.length} candidates → ${topPicks.length} picks`);
+
+  let finalPicks = topPicks;
+  if (finalPriceCheck && finalPicks.length > 0) {
+    finalPicks = await applyFinalPriceCheck(finalPicks, enforceMinimums ? DRIFT_SKIP_RELAXED : DRIFT_SKIP);
+    if (enforceMinimums && finalPicks.length < minRequired && topPicks.length >= minRequired) {
+      console.log(`${horizonKey}: final price check dropped below minimum — keeping unverified picks`);
+      finalPicks = topPicks.slice(0, Math.max(minRequired, topPicks.length));
+      relaxSteps.push('skipped strict final price check');
+      setMeta(`last_${horizonKey}_relaxations`, relaxSteps.join('; '));
+    }
+  }
+
+  if (horizonKey === 'intraday') {
+    saveIntradayPicks(date, finalPicks);
+    setMeta('last_intraday_generated', String(Math.floor(Date.now() / 1000)));
+    setMeta('last_intraday_count', String(finalPicks.length));
+  } else {
+    saveDailyPicks(date, finalPicks);
+    setMeta('last_picks_generated', String(Math.floor(Date.now() / 1000)));
+    setMeta('last_picks_count', String(finalPicks.length));
+  }
+
+  console.log(`Generated ${finalPicks.length} ${horizonKey} picks`);
+  return finalPicks;
+}
+
+function pickTopCandidates(horizonKey, candidates, horizon, minRequired, allowAll = false) {
+  candidates.sort((a, b) => {
     if (horizonKey === 'intraday') {
       return (a.hours_until_close ?? 999) - (b.hours_until_close ?? 999) || b.confidence - a.confidence;
     }
     return b.confidence - a.confidence || b.score - a.score;
   });
 
-  let topPicks;
   if (horizonKey === 'intraday') {
-    topPicks = selectDailySignals(merged, horizon);
-  } else {
-    topPicks = merged.slice(0, horizon.maxPicks);
+    return selectDailySignals(candidates, horizon);
   }
-
-  if (finalPriceCheck && topPicks.length > 0) {
-    topPicks = await applyFinalPriceCheck(topPicks);
-  }
-
-  if (horizonKey === 'intraday') {
-    saveIntradayPicks(date, topPicks);
-    setMeta('last_intraday_generated', String(Math.floor(Date.now() / 1000)));
-    setMeta('last_intraday_count', String(topPicks.length));
-  } else {
-    saveDailyPicks(date, topPicks);
-    setMeta('last_picks_generated', String(Math.floor(Date.now() / 1000)));
-    setMeta('last_picks_count', String(topPicks.length));
-  }
-
-  console.log(`Generated ${topPicks.length} ${horizonKey} picks`);
-  return topPicks;
+  return selectSwingSignals(candidates, horizon, allowAll);
 }
 
 const POSITION_CONCURRENCY = 8;
@@ -385,6 +445,7 @@ async function scanMarketHolders(eliteMap, portfolioTotals, positionLookup, date
 async function scanPositionOverlap(allPositions, portfolioTotals, date, horizon, opts = {}) {
   const marketsCache = opts.marketsCache ?? new Map();
   const restrictToCached = opts.restrictToCached ?? false;
+  const minLiquidity = opts.minLiquidity ?? MIN_LIQUIDITY;
   const grouped = groupPositions(allPositions);
   const candidates = [];
 
@@ -394,7 +455,7 @@ async function scanPositionOverlap(allPositions, portfolioTotals, date, horizon,
 
     const market =
       marketsCache.get(group.conditionId) ?? (await getMarket(group.conditionId, marketsCache));
-    if (!market || !passesMarketFilters(market, horizon)) continue;
+    if (!market || !passesMarketFilters(market, horizon, opts)) continue;
 
     if (horizon.minSoloPositionSize && group.traders.length === 1) {
       if (group.traders[0].size < horizon.minSoloPositionSize) continue;
@@ -419,14 +480,16 @@ async function scanPositionOverlap(allPositions, portfolioTotals, date, horizon,
   return candidates;
 }
 
-function passesMarketFilters(market, horizon) {
+function passesMarketFilters(market, horizon, overrides = {}) {
+  const minLiquidity = overrides.minLiquidity ?? MIN_LIQUIDITY;
   const liquidity = getMarketLiquidity(market);
-  if (liquidity < MIN_LIQUIDITY) return false;
+  if (liquidity < minLiquidity) return false;
 
   const hoursLeft = getHoursUntilClose(market);
   if (hoursLeft == null) return false;
 
-  if (hoursLeft < horizon.minHoursToClose) return false;
+  const minHours = overrides.minHoursToClose ?? horizon.minHoursToClose;
+  if (hoursLeft < minHours) return false;
   if (horizon.maxHoursToClose != null && hoursLeft > horizon.maxHoursToClose) return false;
 
   return true;
@@ -434,6 +497,7 @@ function passesMarketFilters(market, horizon) {
 
 async function buildCandidate(group, market, tokenId, date, marketsCache, horizon, opts = {}) {
   const skipPriceHistory = opts.skipPriceHistory ?? false;
+  const driftSkip = opts.driftSkip ?? DRIFT_SKIP;
   const coordination = detectCoordinatedEntry(group.traders, horizon.minConsensus);
   if (!tokenId) tokenId = getTokenIdForSide(market, group.side);
   if (!tokenId) return null;
@@ -458,7 +522,7 @@ async function buildCandidate(group, market, tokenId, date, marketsCache, horizo
   if (currentPrice < MIN_PRICE || currentPrice > MAX_PRICE) return null;
 
   const driftPct = calculateDriftPct(avgEntryPrice, currentPrice);
-  if (driftPct > DRIFT_SKIP) return null;
+  if (driftPct > driftSkip) return null;
 
   const avgWinRate = group.traders.reduce((s, t) => s + t.winRate, 0) / group.traders.length;
   const liquidity = getMarketLiquidity(market);
@@ -531,7 +595,20 @@ function selectDailySignals(candidates, horizon) {
     filtered = candidates;
   }
 
-  return filtered.slice(0, Math.min(horizon.maxPicks, filtered.length));
+  return filtered.slice(0, Math.min(horizon.maxPicks, Math.max(minRequired, filtered.length)));
+}
+
+function selectSwingSignals(candidates, horizon, allowAll = false) {
+  const minRequired = horizon.minSignals ?? MIN_SWING_SIGNALS;
+  let filtered = candidates.slice(0, horizon.maxPicks);
+
+  if (filtered.length >= minRequired) return filtered.slice(0, Math.max(minRequired, filtered.length));
+
+  if (allowAll && candidates.length > 0) {
+    return candidates.slice(0, Math.max(minRequired, Math.min(horizon.maxPicks, candidates.length)));
+  }
+
+  return filtered;
 }
 
 function mergeCandidates(...lists) {
@@ -546,7 +623,7 @@ function mergeCandidates(...lists) {
   return [...map.values()];
 }
 
-async function applyFinalPriceCheck(picks) {
+async function applyFinalPriceCheck(picks, driftSkip = DRIFT_SKIP) {
   const verified = [];
   for (const pick of picks) {
     try {
@@ -555,7 +632,7 @@ async function applyFinalPriceCheck(picks) {
       if (livePrice < MIN_PRICE || livePrice > MAX_PRICE) continue;
 
       const driftPct = calculateDriftPct(pick.entry_price, livePrice);
-      if (driftPct > DRIFT_SKIP) continue;
+      if (driftPct > driftSkip) continue;
 
       verified.push({
         ...pick,

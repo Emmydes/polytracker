@@ -115,6 +115,17 @@ function initSchema(database) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS curated_wallets (
+      address TEXT PRIMARY KEY,
+      win_rate REAL,
+      resolved_trades INTEGER,
+      total_trades INTEGER,
+      total_profit REAL,
+      source TEXT DEFAULT 'curated',
+      added_at INTEGER,
+      notes TEXT
+    );
   `);
 }
 
@@ -657,4 +668,92 @@ export function setMeta(key, value) {
 export function getMeta(key) {
   const row = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key);
   return row?.value ?? null;
+}
+
+export function upsertCuratedWallet(wallet) {
+  const now = Math.floor(Date.now() / 1000);
+  getDb()
+    .prepare(`
+      INSERT INTO curated_wallets (
+        address, win_rate, resolved_trades, total_trades, total_profit, source, added_at, notes
+      ) VALUES (
+        @address, @win_rate, @resolved_trades, @total_trades, @total_profit, @source, @added_at, @notes
+      )
+      ON CONFLICT(address) DO UPDATE SET
+        win_rate = excluded.win_rate,
+        resolved_trades = excluded.resolved_trades,
+        total_trades = excluded.total_trades,
+        total_profit = excluded.total_profit,
+        source = excluded.source,
+        notes = COALESCE(excluded.notes, curated_wallets.notes)
+    `)
+    .run({
+      source: 'curated',
+      added_at: now,
+      notes: null,
+      total_profit: 0,
+      ...wallet,
+      address: wallet.address.toLowerCase(),
+    });
+}
+
+export function getCuratedWallets() {
+  return getDb()
+    .prepare('SELECT * FROM curated_wallets ORDER BY resolved_trades DESC, win_rate DESC')
+    .all();
+}
+
+/** Seed curated_wallets table and sync elite_traders + wallet_stats for signal generation. */
+export function ensureCuratedWalletsInDb(wallets) {
+  const now = Math.floor(Date.now() / 1000);
+  let inserted = 0;
+  const curatedAddresses = new Set(wallets.map((w) => w.address.toLowerCase()));
+
+  const tx = getDb().transaction(() => {
+    const staleElite = getDb().prepare('SELECT address FROM elite_traders').all();
+    for (const row of staleElite) {
+      const addr = row.address.toLowerCase();
+      if (!curatedAddresses.has(addr)) {
+        getDb().prepare('DELETE FROM trader_positions WHERE LOWER(address) = ?').run(addr);
+        getDb().prepare('DELETE FROM wallet_stats WHERE LOWER(wallet) = ?').run(addr);
+        getDb().prepare('DELETE FROM elite_traders WHERE LOWER(address) = ?').run(addr);
+      }
+    }
+
+    for (const w of wallets) {
+      const address = w.address.toLowerCase();
+      upsertCuratedWallet({ ...w, address });
+
+      upsertEliteTrader({
+        address,
+        win_rate: w.win_rate,
+        total_profit: w.total_profit ?? 0,
+        total_trades: w.total_trades ?? w.resolved_trades,
+        resolved_trades: w.resolved_trades,
+        trading_days_30: w.trading_days_30 ?? 20,
+        last_10_win_rate: w.last_10_win_rate ?? w.win_rate,
+        is_cooling_off: 0,
+        last_fetched: now,
+      });
+
+      upsertWalletStats({
+        wallet: address,
+        win_rate: w.win_rate,
+        total_resolved: w.resolved_trades,
+        avg_roi: w.avg_roi ?? 0,
+        last_checked: now,
+        status: 'ACTIVE',
+      });
+      inserted++;
+    }
+  });
+  tx();
+  return inserted;
+}
+
+export function closeDb() {
+  if (db) {
+    db.close();
+    db = null;
+  }
 }
