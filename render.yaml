@@ -22,7 +22,7 @@ services:
       - key: BOOTSTRAP_HOLDERS_PER_MARKET
         value: "8"
       - key: BOOTSTRAP_MAX_EVALUATE
-        value: "80"
+        value: "120"
       - key: SKIP_BACKGROUND_DISCOVERY
         value: "true"
       - key: DISCOVERY_LEADERBOARD_LIMIT

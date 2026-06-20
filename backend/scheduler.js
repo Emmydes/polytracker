@@ -115,6 +115,19 @@ export function startScheduler() {
     }
   });
 
+  cron.schedule('*/10 * * * *', async () => {
+    try {
+      const tracked = getActiveTrackedWallets().length;
+      const enterable = getTodaysPicks().length + getTodaysIntradayPicks().length;
+      if (tracked > 0 && enterable === 0 && getMeta('bootstrap_complete') === 'true') {
+        console.log('[cron] No enterable picks — retrying signal refresh…');
+        await refreshSignalsFromCache('empty picks cron');
+      }
+    } catch (err) {
+      console.error('[cron] Empty picks retry failed:', err.message);
+    }
+  });
+
   console.log('Scheduler started: discovery @ midnight, swing @ 7AM, intraday @ 8/12/4/8PM, lifecycle every 15m');
 }
 

@@ -1,7 +1,7 @@
 import { buildDiscoveryQueue, evaluateWalletBatch } from './traderScorer.js';
 import { runPicksRefresh } from './recommender.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
-import { setMeta, getMeta, getActiveTrackedWallets } from './db.js';
+import { setMeta, getMeta, getActiveTrackedWallets, getTodaysPicks, getTodaysIntradayPicks } from './db.js';
 
 const INITIAL_WALLETS = Number(process.env.BOOTSTRAP_DISCOVERY_LIMIT) || 100;
 const BATCH_SIZE = Number(process.env.DISCOVERY_BATCH_SIZE) || 12;
@@ -51,19 +51,22 @@ export async function refreshSignalsFromCache(reason) {
   console.log(`Refreshing signals (${reason})…`);
   await runSignalLifecycle();
   const tracked = getActiveTrackedWallets().length;
+  const useQuick = tracked >= 30;
   let batch = await runPicksRefresh(['swing', 'intraday'], {
-    quick: tracked >= 30,
-    finalPriceCheck: true,
+    quick: useQuick,
+    finalPriceCheck: tracked >= 8,
   });
 
-  const swingCount = batch.swing?.length ?? 0;
-  const dailyCount = batch.intraday?.length ?? 0;
-  if (swingCount === 0 && dailyCount === 0 && tracked > 0) {
+  let swingCount = batch.swing?.length ?? 0;
+  let dailyCount = batch.intraday?.length ?? 0;
+  if (swingCount === 0 && dailyCount === 0 && tracked > 0 && useQuick) {
     console.log('Quick picks empty — retrying with full holder scan…');
     batch = await runPicksRefresh(['swing', 'intraday'], {
       quick: false,
-      finalPriceCheck: true,
+      finalPriceCheck: tracked >= 8,
     });
+    swingCount = batch.swing?.length ?? 0;
+    dailyCount = batch.intraday?.length ?? 0;
   }
   setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
   setMeta('last_picks_count', String(batch.swing?.length ?? 0));
@@ -113,6 +116,13 @@ export async function runInitialBootstrap(onProgress) {
       onProgress?.(`Generating signals… (${trackedCount} elite wallets)`);
       try {
         await refreshSignalsFromCache(`bootstrap ${nextIndex}/${total}`);
+        const swing = getTodaysPicks().length;
+        const daily = getTodaysIntradayPicks().length;
+        if (swing > 0 || daily > 0) {
+          console.log(`Bootstrap early exit: ${swing} swing, ${daily} daily picks ready`);
+          nextIndex = evaluateLimit;
+          break;
+        }
       } catch (err) {
         console.warn(`Bootstrap picks refresh at ${nextIndex}/${total} failed:`, err.message);
       }
