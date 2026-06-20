@@ -673,7 +673,17 @@ export function getResolvedSignals(horizon = 'all', limit = 50, decidedOnly = fa
   normalized.sort(
     (a, b) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0)
   );
-  return normalized
+
+  const deduped = [];
+  const seen = new Set();
+  for (const row of normalized) {
+    const key = `${row.horizon}:${row.market_id}:${row.recommended_side}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+
+  return deduped
     .filter((row) => !decidedOnly || row.status === 'WON' || row.status === 'LOST')
     .slice(0, limit);
 }

@@ -4,6 +4,7 @@ import {
   calculateDriftPct,
   getTokenIdForSide,
   getHoursUntilClose,
+  parseMarketOutcomes,
   didSignalWin,
   getWinningOutcomeIndex,
 } from './polymarketApi.js';
@@ -20,11 +21,18 @@ const ENTRY_WINDOW_DRIFT_PCT = 5;
 export function isMarketClosed(market) {
   if (!market) return false;
   if (market.closed === true || market.resolved === true) return true;
-  if (market.active === false) return true;
   if (market.umaResolutionStatus === 'resolved') return true;
+  if (market.tokens?.some((t) => t.winner === true)) return true;
 
   const end = market.endDate ?? market.end_date_iso ?? market.closedTime;
-  if (end && new Date(end).getTime() < Date.now()) return true;
+  if (end && new Date(end).getTime() < Date.now()) {
+    const { prices } = parseMarketOutcomes(market);
+    if (prices.length >= 2) {
+      const p0 = Number(prices[0]);
+      const p1 = Number(prices[1]);
+      if ((p0 >= 0.9 && p1 <= 0.1) || (p1 >= 0.9 && p0 <= 0.1)) return true;
+    }
+  }
 
   const hours = getHoursUntilClose(market);
   if (hours != null && hours <= 0) return true;
@@ -222,10 +230,66 @@ export async function processDailySignalLifecycle() {
   return processSignals(getActiveDailySignals(), updateDailySignal, 'Daily');
 }
 
+async function repairSettledOutcomes(updateFn, table) {
+  const rows = getDb()
+    .prepare(`SELECT * FROM ${table} WHERE status IN ('WON', 'LOST', 'ACTIVE', 'EXPIRED')`)
+    .all();
+
+  let fixed = 0;
+  for (const signal of rows) {
+    if (signal.outcome === 'WON' || signal.outcome === 'LOST') continue;
+    if (signal.status !== 'WON' && signal.status !== 'LOST') continue;
+
+    try {
+      const market = await fetchMarketByConditionId(signal.market_id);
+      if (!market) continue;
+      if (!isMarketClosed(market)) {
+        updateFn(signal.id, { status: 'ACTIVE', outcome: null, resolved_at: null });
+        fixed++;
+        continue;
+      }
+      const reopened = { ...signal, status: 'ACTIVE', outcome: null };
+      if (await checkResolution(reopened, updateFn, market)) fixed++;
+    } catch {
+      /* skip */
+    }
+  }
+  if (fixed > 0) console.log(`Repaired ${fixed} settled outcomes in ${table}`);
+  return fixed;
+}
+
+async function settlePendingSignals(updateFn, table, label, options = {}) {
+  const rows = getDb()
+    .prepare(`
+      SELECT * FROM ${table}
+      WHERE COALESCE(outcome, '') NOT IN ('WON', 'LOST')
+        AND status IN ('ACTIVE', 'EXPIRED')
+      ORDER BY created_at DESC
+    `)
+    .all();
+
+  let resolved = 0;
+  for (const signal of rows) {
+    try {
+      const market = await fetchMarketByConditionId(signal.market_id);
+      if (!market) continue;
+      if (await checkResolution(signal, updateFn, market)) resolved++;
+    } catch (err) {
+      console.warn(`${label} settle failed for ${signal.market_id}:`, err.message);
+    }
+  }
+  if (resolved > 0) console.log(`${label}: settled ${resolved} pending signals`);
+  return resolved;
+}
+
 export async function runSignalLifecycle() {
   repairInconsistentStatuses();
+  await repairSettledOutcomes(updateSwingSignal, 'daily_picks');
+  await repairSettledOutcomes(updateDailySignal, 'intraday_picks');
   await revertPrematureResolutions(updateSwingSignal, 'daily_picks');
   await revertPrematureResolutions(updateDailySignal, 'intraday_picks');
+  await settlePendingSignals(updateSwingSignal, 'daily_picks', 'Swing');
+  await settlePendingSignals(updateDailySignal, 'intraday_picks', 'Daily');
   const swing = await processSwingSignalLifecycle();
   const daily = await processDailySignalLifecycle();
   return { swing, daily };

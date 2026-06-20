@@ -303,13 +303,49 @@ export async function fetchTopHolderWallets(marketCount = 25, holdersPerMarket =
 }
 
 export async function fetchMarketByConditionId(conditionId) {
+  const normalizedId = conditionId?.toLowerCase?.() ?? conditionId;
+
+  try {
+    const { data: clob } = await clobClient.get(`/markets/${normalizedId}`);
+    if (clob?.condition_id) return normalizeClobMarket(clob);
+  } catch {
+    /* try gamma */
+  }
+
   return withRetry(async () => {
     const { data } = await gammaClient.get('/markets', {
-      params: { condition_ids: conditionId },
+      params: { condition_ids: normalizedId },
     });
     const markets = Array.isArray(data) ? data : data?.data ?? [];
-    return markets[0] ?? null;
+    const exact = markets.find(
+      (m) => (m.conditionId ?? m.condition_id)?.toLowerCase() === normalizedId
+    );
+    if (exact) return exact;
+
+    if (markets.length === 1 && markets[0]?.conditionId) return markets[0];
+    return null;
   }, `market:${conditionId}`);
+}
+
+function normalizeClobMarket(clob) {
+  const tokens = Array.isArray(clob.tokens) ? clob.tokens : [];
+  return {
+    conditionId: clob.condition_id,
+    condition_id: clob.condition_id,
+    question: clob.question,
+    title: clob.question,
+    closed: clob.closed === true,
+    active: clob.active !== false,
+    resolved: clob.closed === true,
+    umaResolutionStatus: clob.closed ? 'resolved' : undefined,
+    endDate: clob.end_date_iso,
+    end_date_iso: clob.end_date_iso,
+    slug: clob.market_slug,
+    outcomes: tokens.map((t) => t.outcome),
+    outcomePrices: tokens.map((t) => String(t.price ?? 0)),
+    clobTokenIds: tokens.map((t) => t.token_id),
+    tokens,
+  };
 }
 
 export async function fetchTokenPrice(tokenId) {
@@ -536,6 +572,15 @@ export function getTokenIdForSide(market, side) {
 }
 
 export function parseMarketOutcomes(market) {
+  if (market?.tokens?.length) {
+    const tokens = market.tokens;
+    return {
+      outcomes: tokens.map((t) => t.outcome ?? t.name ?? ''),
+      prices: tokens.map((t) => Number(t.price ?? 0)),
+      tokenIds: tokens.map((t) => t.token_id ?? t.tokenId ?? ''),
+    };
+  }
+
   let outcomes = market?.outcomes;
   if (typeof outcomes === 'string') {
     try {
@@ -571,6 +616,11 @@ export function parseMarketOutcomes(market) {
 export function getWinningOutcomeIndex(market) {
   if (!market) return null;
 
+  if (market.tokens?.length) {
+    const winnerIdx = market.tokens.findIndex((t) => t.winner === true);
+    if (winnerIdx >= 0) return winnerIdx;
+  }
+
   const officiallyClosed =
     market.closed === true ||
     market.resolved === true ||
@@ -585,7 +635,7 @@ export function getWinningOutcomeIndex(market) {
   if (!officiallyClosed && !pastEndDate && !pastClose) return null;
 
   const { prices } = parseMarketOutcomes(market);
-  if (prices.length < 2) return officiallyClosed || pastEndDate ? null : null;
+  if (prices.length < 2) return officiallyClosed || pastEndDate || pastClose ? null : null;
 
   const p0 = Number(prices[0]);
   const p1 = Number(prices[1]);
