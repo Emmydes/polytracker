@@ -60,17 +60,65 @@ export function formatShortDate(dateStr) {
 }
 
 export function getEntryWindowEndMs(pick, intraday) {
-  if (pick.status === 'EXPIRED' || pick.status === 'WON' || pick.status === 'LOST') return 0;
-  if (pick.hours_until_close != null && Number(pick.hours_until_close) <= 0) return 0;
+  if (pick.status === 'WON' || pick.status === 'LOST') return 0;
+  if (pick.outcome === 'WON' || pick.outcome === 'LOST') return 0;
+
+  if (!isPickMarketStillOpen(pick)) return 0;
+
   if (pick.entry_window_close) return pick.entry_window_close * 1000;
+
   const created = (pick.created_at ?? Math.floor(Date.now() / 1000)) * 1000;
-  const defaultHours = intraday ? 12 : 24;
-  if (intraday && pick.hours_until_close != null) {
+
+  if (!intraday && pick.close_date) {
+    const settleMs = new Date(pick.close_date).getTime();
+    if (Number.isFinite(settleMs) && settleMs > Date.now()) {
+      return settleMs;
+    }
+  }
+
+  const defaultHours = intraday ? 12 : 48;
+  if (intraday && pick.hours_until_close != null && Number(pick.hours_until_close) > 0) {
     const settleMs = Date.now() + pick.hours_until_close * 3600 * 1000;
     const defaultEnd = created + defaultHours * 3600 * 1000;
     return Math.min(settleMs, defaultEnd);
   }
+
   return created + defaultHours * 3600 * 1000;
+}
+
+export function isPickMarketStillOpen(pick) {
+  if (!pick) return false;
+  if (pick.status === 'WON' || pick.status === 'LOST') return false;
+  if (pick.outcome === 'WON' || pick.outcome === 'LOST') return false;
+
+  if (pick.close_date) {
+    const end = new Date(pick.close_date).getTime();
+    if (Number.isFinite(end)) return end > Date.now();
+  }
+
+  if (pick.hours_until_close != null) {
+    return Number(pick.hours_until_close) > 0;
+  }
+
+  return true;
+}
+
+export function isPickEntryClosed(pick, intraday = false) {
+  if (!isPickMarketStillOpen(pick)) return true;
+  return getEntryWindowEndMs(pick, intraday) <= Date.now();
+}
+
+export function fixPickMarketUrl(pick) {
+  if (!pick) return pick;
+  const url = pick.market_url ?? '';
+  if (url && !url.includes('/market/0x')) return pick;
+  const title = pick.market_title?.trim();
+  return {
+    ...pick,
+    market_url: title
+      ? `https://polymarket.com/search?q=${encodeURIComponent(title)}`
+      : 'https://polymarket.com',
+  };
 }
 
 export function isPickEnterable(pick, nowMs = Date.now()) {

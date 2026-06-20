@@ -3,6 +3,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { filterEnterablePicks } from './pickFilters.js';
+import {
+  normalizeSwingPickForDisplay,
+  normalizeDailyPickForDisplay,
+} from './pickDisplay.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'polytracker.db');
@@ -373,7 +377,25 @@ export function getLatestPicksDate() {
   return fallback?.date ?? null;
 }
 
+export function reviveOpenSwingPicks() {
+  getDb()
+    .prepare(`
+      UPDATE daily_picks
+      SET status = 'ACTIVE', entry_window_close = NULL, outcome = NULL
+      WHERE status = 'EXPIRED'
+        AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
+        AND (
+          close_date IS NULL
+          OR close_date = ''
+          OR julianday(replace(substr(close_date, 1, 19), 'T', ' ')) > julianday('now')
+          OR (hours_until_close IS NOT NULL AND hours_until_close > 0)
+        )
+    `)
+    .run();
+}
+
 export function getOpenSwingPicks() {
+  reviveOpenSwingPicks();
   return getDb()
     .prepare(`
       SELECT * FROM daily_picks
@@ -381,7 +403,8 @@ export function getOpenSwingPicks() {
         AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
       ORDER BY created_at DESC, confidence DESC
     `)
-    .all();
+    .all()
+    .map(normalizeSwingPickForDisplay);
 }
 
 export function getTodaysPicks() {
@@ -591,7 +614,8 @@ export function getOpenDailyPicks() {
         AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
       ORDER BY created_at DESC, confidence DESC
     `)
-    .all();
+    .all()
+    .map(normalizeDailyPickForDisplay);
 }
 
 export function getTodaysIntradayPicks() {

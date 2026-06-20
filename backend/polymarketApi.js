@@ -495,9 +495,20 @@ export function getMarketCloseDate(market) {
 }
 
 export function getMarketUrl(market) {
-  if (market?.slug) return `https://polymarket.com/event/${market.slug}`;
-  if (market?.events?.[0]?.slug) return `https://polymarket.com/event/${market.events[0].slug}`;
-  if (market?.conditionId) return `https://polymarket.com/market/${market.conditionId}`;
+  const eventSlug = market?.events?.[0]?.slug ?? market?.eventSlug ?? market?.event_slug;
+  const marketSlug = market?.slug ?? market?.market_slug;
+
+  if (eventSlug && marketSlug && eventSlug !== marketSlug) {
+    return `https://polymarket.com/event/${eventSlug}/${marketSlug}`;
+  }
+  if (marketSlug) return `https://polymarket.com/event/${marketSlug}`;
+  if (eventSlug) return `https://polymarket.com/event/${eventSlug}`;
+
+  const title = market?.question ?? market?.title ?? market?.groupItemTitle;
+  if (title) {
+    return `https://polymarket.com/search?q=${encodeURIComponent(title)}`;
+  }
+
   return 'https://polymarket.com';
 }
 

@@ -2,41 +2,20 @@ import { useCallback, useEffect, useState } from 'react';
 import PicksDashboard from '../components/PicksDashboard.jsx';
 import StatsBar from '../components/StatsBar.jsx';
 import { formatLastUpdated } from '../utils/autoRefresh.js';
+import { SWING_CACHE_KEY, readPicksCache, writePicksCache } from '../utils/picksCache.js';
+import { fixPickMarketUrl } from '../utils/signalFormat.js';
 
 const API = '/api';
 
-async function loadSwingHistory() {
-  const dates = [];
-  for (let i = 1; i <= 5; i++) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    dates.push(d.toISOString().slice(0, 10));
-  }
-
-  const results = await Promise.all(
-    dates.map(async (day) => {
-      try {
-        const res = await fetch(`${API}/picks?date=${day}&all=true`);
-        if (!res.ok) return { date: day, signals: [] };
-        const data = await res.json();
-        return { date: day, signals: data.picks ?? [] };
-      } catch {
-        return { date: day, signals: [] };
-      }
-    })
-  );
-
-  return results.filter((d) => d.signals.length > 0);
-}
-
 export default function Home({ signalsVersion = 0 }) {
-  const [picks, setPicks] = useState([]);
-  const [date, setDate] = useState('');
-  const [loading, setLoading] = useState(true);
+  const cached = readPicksCache(SWING_CACHE_KEY);
+  const [picks, setPicks] = useState(() => (cached?.picks ?? []).map(fixPickMarketUrl));
+  const [date, setDate] = useState(cached?.date ?? '');
+  const [loading, setLoading] = useState(!cached?.picks?.length);
   const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(cached?.lastUpdated ?? null);
   const [stats, setStats] = useState(null);
-  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [historyDays, setHistoryDays] = useState([]);
 
   const loadStats = useCallback(async () => {
@@ -51,36 +30,30 @@ export default function Home({ signalsVersion = 0 }) {
     }
   }, []);
 
-  const loadHistory = useCallback(async () => {
-    try {
-      setHistoryDays(await loadSwingHistory());
-    } catch {
-      /* optional */
-    }
-  }, []);
-
   const loadPicks = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true);
+    if (!silent && picks.length === 0) setLoading(true);
     setError(null);
     try {
       const res = await fetch(`${API}/picks`);
       if (!res.ok) throw new Error('Could not load signals');
       const data = await res.json();
-      setPicks(data.picks ?? []);
+      const nextPicks = (data.picks ?? []).map(fixPickMarketUrl);
+      setPicks(nextPicks);
       setDate(data.date);
       setLastUpdated(data.lastUpdated);
+      writePicksCache(SWING_CACHE_KEY, data);
     } catch (err) {
-      setError(err.message);
+      if (picks.length === 0) setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [picks.length]);
 
   useEffect(() => {
-    loadPicks();
-    loadStats();
-    loadHistory();
-  }, [loadPicks, loadStats, loadHistory]);
+    loadPicks({ silent: picks.length > 0 });
+    const statsTimer = window.setTimeout(loadStats, 400);
+    return () => window.clearTimeout(statsTimer);
+  }, [loadPicks, loadStats, picks.length]);
 
   useEffect(() => {
     if (signalsVersion > 0) {
@@ -94,10 +67,10 @@ export default function Home({ signalsVersion = 0 }) {
 
   return (
     <div>
-      <StatsBar stats={stats} loading={statsLoading} />
+      {stats || statsLoading ? <StatsBar stats={stats} loading={statsLoading} /> : null}
       <PicksDashboard
         picks={picks}
-        loading={loading}
+        loading={loading && picks.length === 0}
         error={error}
         date={date}
         intraday={false}

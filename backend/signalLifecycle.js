@@ -186,7 +186,8 @@ async function revertPrematureResolutions(updateFn, table) {
   return reverted;
 }
 
-async function processSignals(signals, updateFn, label) {
+async function processSignals(signals, updateFn, label, options = {}) {
+  const { skipPriceExpiry = false } = options;
   let expired = 0;
   let resolved = 0;
 
@@ -199,7 +200,7 @@ async function processSignals(signals, updateFn, label) {
         continue;
       }
 
-      if (signal.status !== 'EXPIRED' && (await checkPriceExpiry(signal, updateFn))) {
+      if (!skipPriceExpiry && signal.status !== 'EXPIRED' && (await checkPriceExpiry(signal, updateFn))) {
         expired++;
       }
     } catch (err) {
@@ -214,7 +215,7 @@ async function processSignals(signals, updateFn, label) {
 }
 
 export async function processSwingSignalLifecycle() {
-  return processSignals(getActiveSwingSignals(), updateSwingSignal, 'Swing');
+  return processSignals(getActiveSwingSignals(), updateSwingSignal, 'Swing', { skipPriceExpiry: true });
 }
 
 export async function processDailySignalLifecycle() {
