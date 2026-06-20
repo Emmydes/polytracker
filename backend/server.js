@@ -5,9 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDb } from './db.js';
 import {
-  getTodaysPicks,
   getDailyPicks,
-  getTodaysIntradayPicks,
   getIntradayPicks,
   getOpenSwingPicks,
   getOpenDailyPicks,
@@ -46,9 +44,8 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', telegram: isTelegramConfigured() });
 });
 
-app.get('/api/picks', async (req, res) => {
+app.get('/api/picks', (req, res) => {
   try {
-    await runSignalLifecycle();
     const date = req.query.date || getLatestPicksDate() || new Date().toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     const picks =
@@ -65,9 +62,8 @@ app.get('/api/picks', async (req, res) => {
   }
 });
 
-app.get('/api/picks/intraday', async (req, res) => {
+app.get('/api/picks/intraday', (req, res) => {
   try {
-    await runSignalLifecycle();
     const date = req.query.date || getLatestIntradayDate() || new Date().toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     const picks =

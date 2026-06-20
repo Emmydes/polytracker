@@ -60,9 +60,9 @@ export default function Results() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-xl sm:text-2xl font-display font-semibold text-gray-100 mb-1">Results</h1>
-        <p className="text-gray-400 text-sm">Settled signal trades — win/loss and profit %</p>
+      <div className="mb-4">
+        <h1 className="text-lg font-display font-semibold text-gray-100 mb-1">Results</h1>
+        <p className="text-gray-400 text-xs">Settled trades — win/loss and profit %</p>
       </div>
 
       {!loading && rows.length > 0 ? (

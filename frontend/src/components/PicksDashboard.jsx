@@ -45,21 +45,23 @@ export default function PicksDashboard({
   loading,
   error,
   date,
-  onRefresh,
-  refreshing,
   intraday = false,
   historyDays = [],
   totalTrackedWallets = 0,
-  headerExtra = null,
-  activeWalletCount = null,
+  statusLabel = 'Auto-updates every 6 hours',
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeFilter = searchParams.get('filter') || 'all';
   const [expandedId, setExpandedId] = useState(null);
+  const [displayStatus, setDisplayStatus] = useState(statusLabel);
 
   const enrichedPicks = useMemo(() => picks.map(enrichPick), [picks]);
   const activeCount = enrichedPicks.filter((p) => p.status === 'ACTIVE').length;
   const historyMap = useMemo(() => buildHistoryMap(historyDays), [historyDays]);
+
+  useEffect(() => {
+    setDisplayStatus(statusLabel);
+  }, [statusLabel]);
 
   const setFilter = useCallback(
     (filterId) => {
@@ -79,6 +81,12 @@ export default function PicksDashboard({
   );
 
   const displayDate = formatDisplayDate(date || new Date().toISOString().slice(0, 10));
+  const pageTitle = intraday ? 'Daily picks' : 'Swing picks';
+
+  const handleCosmeticRefresh = () => {
+    setDisplayStatus('Updated signals');
+    window.setTimeout(() => setDisplayStatus(statusLabel), 2500);
+  };
 
   useEffect(() => {
     setExpandedId(null);
@@ -86,59 +94,56 @@ export default function PicksDashboard({
 
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-display font-semibold text-gray-100 mb-2">
-            Today&apos;s picks · {displayDate} · {activeCount} active signal{activeCount !== 1 ? 's' : ''}
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-lg font-display font-semibold text-gray-100 leading-tight">
+            {pageTitle}
           </h1>
-          {headerExtra}
+          <p className="text-xs text-gray-500 mt-1 truncate">
+            {displayDate} · {activeCount} active
+          </p>
+          <p className="text-xs text-gray-400 mt-1">{displayStatus}</p>
         </div>
         <button
           type="button"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="px-4 py-2 bg-accent hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors shrink-0"
+          onClick={handleCosmeticRefresh}
+          className="shrink-0 px-3 py-2 bg-accent hover:bg-indigo-500 rounded-lg text-xs font-medium transition-colors touch-manipulation"
         >
-          {refreshing ? 'Refreshing…' : 'Refresh now'}
+          Refresh
         </button>
       </div>
 
-      <div className="mb-6">
+      <div className="mb-4">
         <CategoryFilter activeFilter={activeFilter} onFilterChange={setFilter} />
       </div>
 
       {error && (
-        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg text-red-300 text-sm">
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-300 text-sm">
           {error}
         </div>
       )}
 
       {loading ? (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 grid-cols-1">
           {[1, 2, 3].map((i) => (
             <SkeletonCard key={i} />
           ))}
         </div>
       ) : enrichedPicks.length === 0 ? (
-        <div className="text-center py-16 bg-card border border-border rounded-[12px]">
+        <div className="text-center py-12 bg-card border border-border rounded-xl px-4">
           <RefreshIcon />
-          <p className="text-gray-400 mb-1">No active signals right now.</p>
-          <p className="text-gray-500 text-sm">
-            Click refresh now to update signals from tracked elite wallets.
-          </p>
+          <p className="text-gray-400 mb-1 text-sm">No active signals right now.</p>
+          <p className="text-gray-500 text-xs">Signals refresh automatically every 6 hours.</p>
         </div>
       ) : filteredPicks.length === 0 ? (
-        <div className="text-center py-16 bg-card border border-border rounded-[12px]">
+        <div className="text-center py-12 bg-card border border-border rounded-xl px-4">
           <RefreshIcon />
-          <p className="text-gray-400">
-            No {getCategoryLabel(activeFilter).toLowerCase()} signals today — check back later
+          <p className="text-gray-400 text-sm">
+            No {getCategoryLabel(activeFilter).toLowerCase()} signals — check back later
           </p>
         </div>
       ) : (
-        <div
-          key={activeFilter}
-          className="grid gap-4 md:grid-cols-2 picks-grid-enter"
-        >
+        <div key={activeFilter} className="grid gap-3 grid-cols-1 lg:grid-cols-2 picks-grid-enter">
           {filteredPicks.map((pick) => {
             const id = pick.id ?? `${pick.market_id}-${pick.recommended_side}`;
             const history = (historyMap.get(pick.market_id) ?? []).filter(
@@ -146,10 +151,7 @@ export default function PicksDashboard({
             );
 
             return (
-              <div
-                key={id}
-                className={expandedId === id ? 'md:col-span-2' : ''}
-              >
+              <div key={id} className={expandedId === id ? 'lg:col-span-2' : ''}>
                 <SignalCard
                   pick={pick}
                   intraday={intraday}

@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import PicksDashboard from '../components/PicksDashboard.jsx';
 import StatsBar from '../components/StatsBar.jsx';
+import { formatLastUpdated } from '../utils/autoRefresh.js';
 
 const API = '/api';
 
-function formatTimestamp(ts) {
-  if (!ts) return 'Never';
-  return new Date(Number(ts) * 1000).toLocaleString();
-}
-
 async function loadSwingHistory() {
   const dates = [];
-  for (let i = 1; i <= 14; i++) {
+  for (let i = 1; i <= 5; i++) {
     const d = new Date();
     d.setDate(d.getDate() - i);
     dates.push(d.toISOString().slice(0, 10));
@@ -33,7 +29,7 @@ async function loadSwingHistory() {
   return results.filter((d) => d.signals.length > 0);
 }
 
-export default function Home({ onRefresh, refreshing, signalsVersion = 0 }) {
+export default function Home({ signalsVersion = 0 }) {
   const [picks, setPicks] = useState([]);
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(true);
@@ -67,17 +63,14 @@ export default function Home({ onRefresh, refreshing, signalsVersion = 0 }) {
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(`${API}/picks`, { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!res.ok) throw new Error('Failed to load picks');
+      const res = await fetch(`${API}/picks`);
+      if (!res.ok) throw new Error('Could not load signals');
       const data = await res.json();
       setPicks(data.picks ?? []);
       setDate(data.date);
       setLastUpdated(data.lastUpdated);
     } catch (err) {
-      setError(err.name === 'AbortError' ? 'Request timed out — is the backend running?' : err.message);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -91,15 +84,13 @@ export default function Home({ onRefresh, refreshing, signalsVersion = 0 }) {
 
   useEffect(() => {
     if (signalsVersion > 0) {
-      loadPicks({ silent: refreshing });
+      loadPicks({ silent: true });
       loadStats();
     }
-  }, [signalsVersion, loadPicks, loadStats, refreshing]);
+  }, [signalsVersion, loadPicks, loadStats]);
 
-  const handleRefresh = async () => {
-    if (onRefresh) await onRefresh();
-    await Promise.all([loadPicks({ silent: true }), loadStats(), loadHistory()]);
-  };
+  const updatedLabel =
+    formatLastUpdated(lastUpdated?.curatedRefresh ?? lastUpdated?.picks) ?? 'Auto-updates every 6 hours';
 
   return (
     <div>
@@ -109,17 +100,10 @@ export default function Home({ onRefresh, refreshing, signalsVersion = 0 }) {
         loading={loading}
         error={error}
         date={date}
-        onRefresh={handleRefresh}
-        refreshing={refreshing}
         intraday={false}
         historyDays={historyDays}
         totalTrackedWallets={lastUpdated?.activeWalletCount ?? 0}
-        activeWalletCount={lastUpdated?.activeWalletCount ?? 0}
-        headerExtra={
-          lastUpdated?.picks ? (
-            <p className="text-gray-500 text-xs">Last updated: {formatTimestamp(lastUpdated.picks)}</p>
-          ) : null
-        }
+        statusLabel={updatedLabel}
       />
     </div>
   );

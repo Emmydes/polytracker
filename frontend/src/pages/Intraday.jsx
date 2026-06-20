@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import DailyHistory from '../components/DailyHistory.jsx';
 import PicksDashboard from '../components/PicksDashboard.jsx';
+import { formatLastUpdated } from '../utils/autoRefresh.js';
 
 const API = '/api';
 
-function formatTimestamp(ts) {
-  if (!ts) return 'Never';
-  return new Date(Number(ts) * 1000).toLocaleString();
-}
-
-export default function Intraday({ onRefresh, refreshing, signalsVersion = 0 }) {
+export default function Intraday({ signalsVersion = 0 }) {
   const [picks, setPicks] = useState([]);
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(true);
@@ -21,7 +17,7 @@ export default function Intraday({ onRefresh, refreshing, signalsVersion = 0 }) 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch(`${API}/signals/daily/history?days=14`);
+      const res = await fetch(`${API}/signals/daily/history?days=7`);
       if (res.ok) setHistory(await res.json());
     } catch {
       /* optional */
@@ -34,17 +30,14 @@ export default function Intraday({ onRefresh, refreshing, signalsVersion = 0 }) 
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(`${API}/picks/intraday`, { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!res.ok) throw new Error('Failed to load daily signals');
+      const res = await fetch(`${API}/picks/intraday`);
+      if (!res.ok) throw new Error('Could not load signals');
       const data = await res.json();
       setPicks(data.picks ?? []);
       setDate(data.date);
       setLastUpdated(data.lastUpdated);
     } catch (err) {
-      setError(err.name === 'AbortError' ? 'Request timed out — is the backend running?' : err.message);
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -57,15 +50,13 @@ export default function Intraday({ onRefresh, refreshing, signalsVersion = 0 }) 
 
   useEffect(() => {
     if (signalsVersion > 0) {
-      loadPicks({ silent: refreshing });
+      loadPicks({ silent: true });
       loadHistory();
     }
-  }, [signalsVersion, loadPicks, loadHistory, refreshing]);
+  }, [signalsVersion, loadPicks, loadHistory]);
 
-  const handleRefresh = async () => {
-    if (onRefresh) await onRefresh();
-    await Promise.all([loadPicks({ silent: true }), loadHistory()]);
-  };
+  const updatedLabel =
+    formatLastUpdated(lastUpdated?.curatedRefresh ?? lastUpdated?.intraday) ?? 'Auto-updates every 6 hours';
 
   return (
     <div>
@@ -74,17 +65,10 @@ export default function Intraday({ onRefresh, refreshing, signalsVersion = 0 }) 
         loading={loading}
         error={error}
         date={date}
-        onRefresh={handleRefresh}
-        refreshing={refreshing}
         intraday
         historyDays={history}
         totalTrackedWallets={lastUpdated?.activeWalletCount ?? 0}
-        activeWalletCount={lastUpdated?.activeWalletCount ?? 0}
-        headerExtra={
-          lastUpdated?.intraday ? (
-            <p className="text-gray-500 text-xs">Last updated: {formatTimestamp(lastUpdated.intraday)}</p>
-          ) : null
-        }
+        statusLabel={updatedLabel}
       />
       <DailyHistory history={history} loading={historyLoading} />
     </div>

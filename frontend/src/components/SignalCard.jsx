@@ -164,7 +164,7 @@ export default function SignalCard({
           </span>
         </div>
 
-        <h3 className="text-sm font-medium text-gray-100 truncate mb-2">{pick.market_title}</h3>
+        <h3 className="text-sm font-medium text-gray-100 line-clamp-2 mb-2">{pick.market_title}</h3>
 
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm mb-2">
           <span className="font-display font-semibold text-gray-200">

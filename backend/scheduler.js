@@ -290,6 +290,7 @@ export function getLastUpdated() {
     discovery: getMeta('last_discovery'),
     picks: getMeta('last_picks_generated'),
     manualRefresh: getMeta('last_manual_refresh'),
+    curatedRefresh: getMeta('last_curated_refresh'),
     discoveryEvaluated: getMeta('last_discovery_evaluated'),
     discoveryQualified: getMeta('last_discovery_qualified'),
     picksCount: getMeta('last_picks_count'),
