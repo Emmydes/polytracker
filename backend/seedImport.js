@@ -9,8 +9,9 @@ const SEED_PATH = path.join(__dirname, 'seed', 'wallet-cache.json');
 export function importSeedIfEmpty() {
   const db = getDb();
   const eliteCount = db.prepare('SELECT COUNT(*) AS n FROM elite_traders').get().n;
-  if (eliteCount > 0) {
-    return { imported: false, reason: 'database already has elite traders' };
+  const positionCount = db.prepare('SELECT COUNT(*) AS n FROM trader_positions').get().n;
+  if (eliteCount > 0 && positionCount > 0) {
+    return { imported: false, reason: 'database already has wallet cache' };
   }
 
   if (!fs.existsSync(SEED_PATH)) {
@@ -52,6 +53,11 @@ export function importSeedIfEmpty() {
   `);
 
   const tx = db.transaction(() => {
+    if (eliteCount > 0 || positionCount > 0) {
+      db.prepare('DELETE FROM trader_positions').run();
+      db.prepare('DELETE FROM wallet_stats').run();
+      db.prepare('DELETE FROM elite_traders').run();
+    }
     for (const row of eliteTraders) insertElite.run(row);
     for (const row of walletStats) insertWallet.run(row);
     for (const row of traderPositions) insertPosition.run(row);
