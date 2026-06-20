@@ -132,6 +132,12 @@ export function startScheduler() {
 }
 
 export async function bootstrapIfEmpty() {
+  const { importSeedIfEmpty } = await import('./seedImport.js');
+  const seedResult = importSeedIfEmpty();
+  if (seedResult.imported) {
+    console.log(`Startup: loaded seed (${seedResult.counts.eliteTraders} wallets, ${seedResult.counts.traderPositions} positions)`);
+  }
+
   const tracked = getActiveTrackedWallets().length;
 
   if (tracked > 0) {
