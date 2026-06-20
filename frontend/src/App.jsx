@@ -10,14 +10,13 @@ const navClass = ({ isActive }) =>
     isActive ? 'bg-accent text-white' : 'text-gray-400 hover:text-white hover:bg-navy'
   }`;
 
-async function pollRefreshStatus(onProgress, maxWait = 60 * 1000) {
+async function pollRefreshStatus(maxWait = 60 * 1000) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
     await new Promise((r) => setTimeout(r, 400));
     const res = await fetch('/api/refresh/status');
     const status = await res.json();
-    if (status.phase) onProgress?.(status.phase);
     if (!status.running) {
       if (status.error) throw new Error(status.error);
       return status.results;
@@ -74,13 +73,7 @@ export default function App() {
       const data = await res.json();
 
       if (res.status === 202 && (data.accepted || data.alreadyRunning)) {
-        setRefreshPhase(onToday ? 'Updating daily signals…' : 'Updating swing signals…');
-        const results = await pollRefreshStatus(setRefreshPhase, 60 * 1000);
-        const parts = [];
-        if (results?.picksCount != null) parts.push(`${results.picksCount} swing`);
-        if (results?.intradayCount != null) parts.push(`${results.intradayCount} daily`);
-        if (parts.length) setRefreshPhase(`Done — ${parts.join(', ')}`);
-        else setRefreshPhase('Done');
+        await pollRefreshStatus(60 * 1000);
         setSignalsVersion((v) => v + 1);
         await pollAppStatus();
         return;
@@ -88,7 +81,7 @@ export default function App() {
 
       if (!res.ok) throw new Error(data.error || 'Refresh failed to start');
     } catch (err) {
-      setRefreshPhase(err.message);
+      console.error(err.message);
     } finally {
       setTimeout(() => {
         setRefreshing(false);

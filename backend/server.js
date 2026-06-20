@@ -9,6 +9,8 @@ import {
   getDailyPicks,
   getTodaysIntradayPicks,
   getIntradayPicks,
+  getOpenSwingPicks,
+  getOpenDailyPicks,
   getLatestIntradayDate,
   getPositionsByMarket,
   getLatestPicksDate,
@@ -50,7 +52,9 @@ app.get('/api/picks', async (req, res) => {
     const date = req.query.date || getLatestPicksDate() || new Date().toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     const picks =
-      date === today && !req.query.date ? getTodaysPicks() : getDailyPicks(date, req.query.all !== 'true');
+      date === today && !req.query.date
+        ? getOpenSwingPicks()
+        : getDailyPicks(date, req.query.all !== 'true');
     res.json({
       date,
       picks,
@@ -68,7 +72,7 @@ app.get('/api/picks/intraday', async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     const picks =
       date === today && !req.query.date
-        ? getTodaysIntradayPicks()
+        ? getOpenDailyPicks()
         : getIntradayPicks(date, req.query.all !== 'true');
     res.json({
       date,

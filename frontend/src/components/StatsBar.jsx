@@ -17,11 +17,6 @@ export default function StatsBar({ stats, loading }) {
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 py-4 mb-6 border-b border-border text-sm">
       <div>
-        <span className="text-gray-500 mr-2">Total signals</span>
-        <span className="font-display text-lg font-semibold">{stats.total ?? 0}</span>
-      </div>
-      <div className="hidden sm:block w-px h-6 bg-border" />
-      <div>
         <span className="text-gray-500 mr-2">Win rate</span>
         <span className="font-display text-lg font-semibold text-emerald-400">{winPct}%</span>
       </div>

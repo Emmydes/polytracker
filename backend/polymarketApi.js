@@ -556,10 +556,25 @@ export function parseMarketOutcomes(market) {
   };
 }
 
-/** Which outcome index (0 or 1) won, for binary / team-name markets. */
+/** Which outcome index (0 or 1) won — only when Polymarket has closed/resolved the market. */
 export function getWinningOutcomeIndex(market) {
+  if (!market) return null;
+
+  const officiallyClosed =
+    market.closed === true ||
+    market.resolved === true ||
+    market.umaResolutionStatus === 'resolved' ||
+    market.active === false;
+
+  const end = market.endDate ?? market.end_date_iso ?? market.closedTime;
+  const pastEndDate = end ? new Date(end).getTime() < Date.now() : false;
+  const hours = getHoursUntilClose(market);
+  const pastClose = hours != null && hours <= 0;
+
+  if (!officiallyClosed && !pastEndDate && !pastClose) return null;
+
   const { prices } = parseMarketOutcomes(market);
-  if (prices.length < 2) return null;
+  if (prices.length < 2) return officiallyClosed || pastEndDate ? null : null;
 
   const p0 = Number(prices[0]);
   const p1 = Number(prices[1]);
@@ -567,13 +582,7 @@ export function getWinningOutcomeIndex(market) {
   if (p0 >= 0.9 && p1 <= 0.1) return 0;
   if (p1 >= 0.9 && p0 <= 0.1) return 1;
 
-  if (market && (market.closed === true || market.resolved === true || market.umaResolutionStatus === 'resolved')) {
-    if (p0 > p1 + 0.1) return 0;
-    if (p1 > p0 + 0.1) return 1;
-  }
-
-  const hours = getHoursUntilClose(market);
-  if (hours != null && hours <= 0) {
+  if (officiallyClosed || pastEndDate || pastClose) {
     if (p0 > p1 + 0.05) return 0;
     if (p1 > p0 + 0.05) return 1;
   }

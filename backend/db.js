@@ -373,6 +373,17 @@ export function getLatestPicksDate() {
   return fallback?.date ?? null;
 }
 
+export function getOpenSwingPicks() {
+  return getDb()
+    .prepare(`
+      SELECT * FROM daily_picks
+      WHERE status IN ('ACTIVE', 'EXPIRED')
+        AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
+      ORDER BY created_at DESC, confidence DESC
+    `)
+    .all();
+}
+
 export function getTodaysPicks() {
   const today = new Date().toISOString().slice(0, 10);
   let picks = getDailyPicks(today, true);
@@ -570,6 +581,17 @@ export function getLatestIntradayDate() {
   if (row?.signal_date) return row.signal_date;
   const fallback = getDb().prepare('SELECT signal_date FROM intraday_picks ORDER BY signal_date DESC LIMIT 1').get();
   return fallback?.signal_date ?? null;
+}
+
+export function getOpenDailyPicks() {
+  return getDb()
+    .prepare(`
+      SELECT * FROM intraday_picks
+      WHERE status IN ('ACTIVE', 'EXPIRED')
+        AND COALESCE(outcome, '') NOT IN ('WON', 'LOST')
+      ORDER BY created_at DESC, confidence DESC
+    `)
+    .all();
 }
 
 export function getTodaysIntradayPicks() {

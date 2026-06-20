@@ -59,7 +59,7 @@ export default function PicksDashboard({
   const [expandedId, setExpandedId] = useState(null);
 
   const enrichedPicks = useMemo(() => picks.map(enrichPick), [picks]);
-  const activeCount = enrichedPicks.filter((p) => p.status !== 'EXPIRED').length;
+  const activeCount = enrichedPicks.filter((p) => p.status === 'ACTIVE').length;
   const historyMap = useMemo(() => buildHistoryMap(historyDays), [historyDays]);
 
   const setFilter = useCallback(
@@ -100,7 +100,7 @@ export default function PicksDashboard({
           disabled={refreshing}
           className="px-4 py-2 bg-accent hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-sm font-medium transition-colors shrink-0"
         >
-          {refreshing ? refreshPhase || 'Refreshing…' : 'Refresh now'}
+          {refreshing ? 'Refreshing…' : 'Refresh now'}
         </button>
       </div>
 

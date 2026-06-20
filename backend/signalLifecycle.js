@@ -44,11 +44,11 @@ function repairInconsistentStatuses() {
   const db = getDb();
   db.prepare(`
     UPDATE daily_picks SET status = outcome, resolved_at = COALESCE(resolved_at, ?)
-    WHERE status IN ('ACTIVE', 'EXPIRED') AND outcome IN ('WON', 'LOST')
+    WHERE status = 'EXPIRED' AND outcome IN ('WON', 'LOST')
   `).run(now);
   db.prepare(`
     UPDATE intraday_picks SET status = outcome, resolved_at = COALESCE(resolved_at, ?)
-    WHERE status IN ('ACTIVE', 'EXPIRED') AND outcome IN ('WON', 'LOST')
+    WHERE status = 'EXPIRED' AND outcome IN ('WON', 'LOST')
   `).run(now);
 }
 
@@ -117,10 +117,6 @@ async function checkPriceExpiry(signal, updateFn) {
   return false;
 }
 
-function signalPastSettlement(signal) {
-  return signal.hours_until_close != null && Number(signal.hours_until_close) <= 0;
-}
-
 async function checkResolution(signal, updateFn, marketPrefetched = null) {
   let market = marketPrefetched;
   if (!market) {
@@ -131,10 +127,10 @@ async function checkResolution(signal, updateFn, marketPrefetched = null) {
     }
   }
 
-  const pastSettle = signalPastSettlement(signal);
-  const closed = isMarketClosed(market) || pastSettle;
+  if (!isMarketClosed(market)) return false;
+
   const decisive = hasDecisiveOutcome(market);
-  if (!closed && !decisive) return false;
+  if (!decisive) return false;
 
   const now = Math.floor(Date.now() / 1000);
   const tokenId = resolveTokenId(signal, market);
@@ -160,13 +156,34 @@ async function checkResolution(signal, updateFn, marketPrefetched = null) {
     return true;
   }
 
-  updateFn(signal.id, {
-    status: 'EXPIRED',
-    outcome: 'EXPIRED',
-    entry_window_close: signal.entry_window_close ?? now,
-    ...resolvedFields,
-  });
-  return true;
+  return false;
+}
+
+async function revertPrematureResolutions(updateFn, table) {
+  const rows = getDb()
+    .prepare(`SELECT * FROM ${table} WHERE status IN ('WON', 'LOST')`)
+    .all();
+
+  let reverted = 0;
+  for (const signal of rows) {
+    try {
+      const market = await fetchMarketByConditionId(signal.market_id);
+      if (!isMarketClosed(market)) {
+        updateFn(signal.id, {
+          status: 'ACTIVE',
+          outcome: null,
+          resolved_at: null,
+        });
+        reverted++;
+      }
+    } catch {
+      /* keep resolved if market fetch fails */
+    }
+  }
+  if (reverted > 0) {
+    console.log(`Reverted ${reverted} premature ${table} outcomes (market not settled)`);
+  }
+  return reverted;
 }
 
 async function processSignals(signals, updateFn, label) {
@@ -179,17 +196,6 @@ async function processSignals(signals, updateFn, label) {
 
       if (await checkResolution(signal, updateFn, market)) {
         resolved++;
-        continue;
-      }
-
-      if (signalPastSettlement(signal) && signal.status !== 'EXPIRED') {
-        updateFn(signal.id, {
-          status: 'EXPIRED',
-          outcome: 'EXPIRED',
-          resolved_at: Math.floor(Date.now() / 1000),
-          hours_until_close: 0,
-        });
-        expired++;
         continue;
       }
 
@@ -217,6 +223,8 @@ export async function processDailySignalLifecycle() {
 
 export async function runSignalLifecycle() {
   repairInconsistentStatuses();
+  await revertPrematureResolutions(updateSwingSignal, 'daily_picks');
+  await revertPrematureResolutions(updateDailySignal, 'intraday_picks');
   const swing = await processSwingSignalLifecycle();
   const daily = await processDailySignalLifecycle();
   return { swing, daily };
