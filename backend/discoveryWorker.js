@@ -1,6 +1,6 @@
 import { fetchPositions, normalizePosition } from './polymarketApi.js';
 import { runPicksRefresh } from './recommender.js';
-import { runSignalLifecycle } from './signalLifecycle.js';
+import { syncResultsForWallets } from './resultsEngine.js';
 import {
   setMeta,
   getMeta,
@@ -115,12 +115,17 @@ export async function refreshCuratedWallets(options = {}) {
   setMeta('last_curated_refresh', String(Math.floor(Date.now() / 1000)));
   setMeta('last_curated_positions', String(positionCount));
   console.log(`Curated refresh: ${total} wallets, ${positionCount} open positions`);
-  return { wallets: total, positions: positionCount };
+
+  onProgress?.('Syncing trade results…');
+  const resultCount = await syncResultsForWallets(traders.map((t) => t.address));
+  setMeta('last_results_sync', String(Math.floor(Date.now() / 1000)));
+  console.log(`Results sync: ${resultCount} trades from ${total} wallets`);
+
+  return { wallets: total, positions: positionCount, results: resultCount };
 }
 
 export async function refreshSignalsFromCache(reason) {
   console.log(`Refreshing signals (${reason})…`);
-  await runSignalLifecycle();
   const tracked = getActiveTrackedWallets().length;
 
   let batch = await runPicksRefresh(['swing', 'intraday'], {

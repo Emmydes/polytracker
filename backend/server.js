@@ -14,7 +14,8 @@ import {
   getLatestPicksDate,
   getSwingSignalStats,
   getDailySignalHistory,
-  getResolvedSignals,
+  getResults,
+  getResultsStats,
 } from './db.js';
 import {
   startScheduler,
@@ -27,7 +28,6 @@ import {
 } from './scheduler.js';
 import { isTelegramConfigured } from './telegram.js';
 import { fetchMarketByConditionId } from './polymarketApi.js';
-import { runSignalLifecycle } from './signalLifecycle.js';
 
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
 
@@ -98,14 +98,38 @@ app.get('/api/signals/daily/history', (req, res) => {
   }
 });
 
-app.get('/api/signals/resolved', async (req, res) => {
+app.get('/api/results', (req, res) => {
   try {
-    await runSignalLifecycle();
-    const horizon = req.query.horizon || 'all';
-    const limit = Math.min(Number(req.query.limit) || 50, 100);
-    const decidedOnly = req.query.decided !== 'false';
+    const limit = Math.min(Number(req.query.limit) || 100, 200);
     res.json({
-      signals: getResolvedSignals(horizon, limit, decidedOnly),
+      results: getResults(limit),
+      stats: getResultsStats(),
+      lastUpdated: getLastUpdated(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/signals/resolved', (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const data = getResults(limit);
+    const stats = getResultsStats();
+    res.json({
+      signals: data.map((row) => ({
+        id: row.id,
+        market_title: row.market_title,
+        recommended_side: row.side,
+        entry_price: row.entry_price,
+        exit_price: row.exit_price,
+        profit_percent: row.profit_percent,
+        status: row.outcome,
+        outcome: row.outcome,
+        resolved_at: row.resolved_at,
+        wallet: row.wallet,
+      })),
+      stats,
       lastUpdated: getLastUpdated(),
     });
   } catch (err) {

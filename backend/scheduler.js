@@ -11,7 +11,6 @@ import {
   getDbPath,
   getDb,
 } from './db.js';
-import { runSignalLifecycle } from './signalLifecycle.js';
 import {
   runCuratedStartup,
   needsFullCuratedRefresh,
@@ -103,7 +102,6 @@ export function startScheduler() {
   cron.schedule('0 7 * * *', async () => {
     console.log('[cron] Starting 7AM swing picks...');
     try {
-      await runSignalLifecycle();
       const picks = await generateDailyPicks({ finalPriceCheck: true, quick: false });
       await sendDailyPicksAlert(picks, 'swing');
       console.log(`[cron] Swing picks complete: ${picks.length} picks`);
@@ -115,19 +113,10 @@ export function startScheduler() {
   cron.schedule('0 8,12,16,20 * * *', async () => {
     console.log('[cron] Starting intraday picks...');
     try {
-      await runSignalLifecycle();
       const picks = await generateIntradayPicks({ finalPriceCheck: true, quick: true });
       console.log(`[cron] Intraday picks complete: ${picks.length} picks`);
     } catch (err) {
       console.error('[cron] Intraday picks failed:', err.message);
-    }
-  });
-
-  cron.schedule('*/15 * * * *', async () => {
-    try {
-      await runSignalLifecycle();
-    } catch (err) {
-      console.error('[cron] Signal lifecycle failed:', err.message);
     }
   });
 
@@ -215,8 +204,6 @@ export async function runManualRefresh(type = 'swing') {
     if (type === 'discovery' || type === 'all') {
       type = 'picks';
     }
-
-    await runSignalLifecycle();
 
     if (!isWalletDiscoveryEnabled()) {
       const lastRefresh = Number(getMeta('last_curated_refresh') || 0);

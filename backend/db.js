@@ -130,6 +130,21 @@ function initSchema(database) {
       added_at INTEGER,
       notes TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      asset TEXT,
+      market_title TEXT,
+      side TEXT,
+      entry_price REAL,
+      exit_price REAL,
+      profit_percent REAL,
+      outcome TEXT,
+      resolved_at INTEGER,
+      wallet TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_results_wallet_asset ON results(wallet, asset);
   `);
 }
 
@@ -805,6 +820,64 @@ export function ensureCuratedWalletsInDb(wallets) {
   });
   tx();
   return inserted;
+}
+
+export function upsertResult(result) {
+  getDb()
+    .prepare(`
+      INSERT INTO results (
+        asset, market_title, side, entry_price, exit_price,
+        profit_percent, outcome, resolved_at, wallet
+      ) VALUES (
+        @asset, @market_title, @side, @entry_price, @exit_price,
+        @profit_percent, @outcome, @resolved_at, @wallet
+      )
+      ON CONFLICT(wallet, asset) DO UPDATE SET
+        market_title = excluded.market_title,
+        side = excluded.side,
+        entry_price = excluded.entry_price,
+        exit_price = excluded.exit_price,
+        profit_percent = excluded.profit_percent,
+        outcome = excluded.outcome,
+        resolved_at = excluded.resolved_at
+    `)
+    .run(result);
+}
+
+export function getResults(limit = 100) {
+  return getDb()
+    .prepare(`
+      SELECT id, market_title, side, entry_price, exit_price,
+             profit_percent, outcome, resolved_at, wallet
+      FROM results
+      ORDER BY resolved_at DESC, id DESC
+      LIMIT ?
+    `)
+    .all(limit);
+}
+
+export function getResultsStats() {
+  const row = getDb()
+    .prepare(`
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN outcome = 'WON' THEN 1 ELSE 0 END) AS wins,
+        AVG(profit_percent) AS avg_profit_percent
+      FROM results
+    `)
+    .get();
+
+  const total = Number(row?.total ?? 0);
+  const wins = Number(row?.wins ?? 0);
+  const winRate = total > 0 ? wins / total : null;
+
+  return {
+    total,
+    wins,
+    losses: total - wins,
+    winRate,
+    avgProfitPercent: row?.avg_profit_percent != null ? Number(row.avg_profit_percent) : null,
+  };
 }
 
 export function closeDb() {
