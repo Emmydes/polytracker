@@ -50,10 +50,21 @@ async function getQueue() {
 export async function refreshSignalsFromCache(reason) {
   console.log(`Refreshing signals (${reason})…`);
   await runSignalLifecycle();
-  const batch = await runPicksRefresh(['swing', 'intraday'], {
-    quick: true,
+  const tracked = getActiveTrackedWallets().length;
+  let batch = await runPicksRefresh(['swing', 'intraday'], {
+    quick: tracked >= 30,
     finalPriceCheck: true,
   });
+
+  const swingCount = batch.swing?.length ?? 0;
+  const dailyCount = batch.intraday?.length ?? 0;
+  if (swingCount === 0 && dailyCount === 0 && tracked > 0) {
+    console.log('Quick picks empty — retrying with full holder scan…');
+    batch = await runPicksRefresh(['swing', 'intraday'], {
+      quick: false,
+      finalPriceCheck: true,
+    });
+  }
   setMeta('last_manual_refresh', String(Math.floor(Date.now() / 1000)));
   setMeta('last_picks_count', String(batch.swing?.length ?? 0));
   setMeta('last_intraday_count', String(batch.intraday?.length ?? 0));
@@ -63,27 +74,31 @@ export async function refreshSignalsFromCache(reason) {
 
 /** Fast first pass: scan leaderboard in small batches and publish signals as wallets qualify. */
 export async function runInitialBootstrap(onProgress) {
+  const holderMarkets = Number(process.env.BOOTSTRAP_HOLDER_MARKETS) || 15;
+  const holdersPer = Number(process.env.BOOTSTRAP_HOLDERS_PER_MARKET) || 10;
   const queue = await buildDiscoveryQueue({
     leaderboardLimit: INITIAL_WALLETS,
-    holderMarketCount: 0,
-    holdersPerMarket: 0,
+    holderMarketCount: holderMarkets,
+    holdersPerMarket: holdersPer,
   });
   queueCache = queue;
   const total = queue.addresses.length;
   setMeta('discovery_queue_total', String(total));
 
   const batchSize = Number(process.env.BOOTSTRAP_BATCH_SIZE) || BATCH_SIZE;
+  const maxEvaluate = Number(process.env.BOOTSTRAP_MAX_EVALUATE) || total;
+  const evaluateLimit = Math.min(total, maxEvaluate);
   let nextIndex = 0;
   let lastBatch = { evaluated: 0, qualified: 0, newQualified: 0 };
 
-  onProgress?.(`Loading traders… 0/${total}`);
+  onProgress?.(`Loading traders… 0/${evaluateLimit}`);
 
-  while (nextIndex < total) {
+  while (nextIndex < evaluateLimit) {
     lastBatch = await evaluateWalletBatch(queue, nextIndex, batchSize, {
       forceRefresh: true,
       onProgress: ({ evaluated }) => {
         onProgress?.(
-          `Loading traders… ${nextIndex + evaluated}/${total} (${getActiveTrackedWallets().length} elite)`
+          `Loading traders… ${nextIndex + evaluated}/${evaluateLimit} (${getActiveTrackedWallets().length} elite)`
         );
       },
     });

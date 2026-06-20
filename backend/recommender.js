@@ -143,7 +143,8 @@ async function generatePicksWithContext(horizonKey, ctx) {
   }
 
   let marketCandidates = [];
-  if (!quick) {
+  const runHolderScan = !quick || totalTrackedWallets < 30;
+  if (runHolderScan) {
     marketCandidates = await scanMarketHolders(
       eliteMap,
       portfolioTotals,
@@ -151,7 +152,7 @@ async function generatePicksWithContext(horizonKey, ctx) {
       date,
       markets,
       horizon,
-      { skipPriceHistory: false, marketsCache, totalTrackedWallets }
+      { skipPriceHistory: quick, marketsCache, totalTrackedWallets }
     );
   }
 
@@ -163,7 +164,7 @@ async function generatePicksWithContext(horizonKey, ctx) {
     {
       skipPriceHistory: quick,
       marketsCache,
-      restrictToCached: quick && horizonKey === 'intraday',
+      restrictToCached: quick && horizonKey === 'intraday' && totalTrackedWallets >= 30,
       totalTrackedWallets,
     }
   );

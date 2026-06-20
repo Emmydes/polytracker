@@ -10,6 +10,7 @@ import {
   getTodaysPicks,
   getTodaysIntradayPicks,
   getDbPath,
+  getDb,
 } from './db.js';
 import { runSignalLifecycle } from './signalLifecycle.js';
 import {
@@ -278,6 +279,9 @@ export function getAppStatus() {
   const discovery = getDiscoveryState();
   const enterableSwing = getTodaysPicks().length;
   const enterableDaily = getTodaysIntradayPicks().length;
+  const db = getDb();
+  const rawSwing = db.prepare("SELECT COUNT(*) AS n FROM daily_picks WHERE status = 'ACTIVE'").get()?.n ?? 0;
+  const rawDaily = db.prepare("SELECT COUNT(*) AS n FROM intraday_picks WHERE status = 'ACTIVE'").get()?.n ?? 0;
   const walletCount = getActiveWalletCount();
   const trackedCount = getActiveTrackedWallets().length;
   const bootstrapComplete =
@@ -292,6 +296,8 @@ export function getAppStatus() {
     trackedWalletCount: trackedCount,
     enterableSwingCount: enterableSwing,
     enterableDailyCount: enterableDaily,
+    rawActiveSwingCount: rawSwing,
+    rawActiveDailyCount: rawDaily,
     lastError: bootstrap.error || discovery.error || null,
     databasePath: getDbPath(),
     skipBackgroundDiscovery: process.env.SKIP_BACKGROUND_DISCOVERY === 'true',

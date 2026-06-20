@@ -219,7 +219,8 @@ export async function evaluateWalletBatch(queue, startIndex, batchSize, options 
 
       if (result.walletStatus === 'DEGRADED') degraded++;
 
-      if (result.qualified && result.walletStatus === 'ACTIVE') {
+      const trackable = result.walletStatus === 'ACTIVE' && (result.qualified || result.preTrackOk);
+      if (trackable) {
         upsertEliteTrader({
           address: result.address,
           win_rate: result.win_rate,
@@ -231,8 +232,12 @@ export async function evaluateWalletBatch(queue, startIndex, batchSize, options 
           is_cooling_off: result.is_cooling_off,
           last_fetched: result.last_fetched,
         });
-        qualified++;
-        newQualified++;
+        if (result.qualified) {
+          qualified++;
+          newQualified++;
+        } else if (result.preTrackOk) {
+          newQualified++;
+        }
       }
     } catch (err) {
       console.error(`Failed to evaluate ${address}:`, err.message);
