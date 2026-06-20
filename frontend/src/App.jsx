@@ -10,11 +10,11 @@ const navClass = ({ isActive }) =>
     isActive ? 'bg-accent text-white' : 'text-gray-400 hover:text-white hover:bg-navy'
   }`;
 
-async function pollRefreshStatus(maxWait = 60 * 1000) {
+async function pollRefreshStatus(maxWait = 90 * 1000) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 500));
     const res = await fetch('/api/refresh/status');
     const status = await res.json();
     if (!status.running) {
@@ -28,11 +28,13 @@ async function pollRefreshStatus(maxWait = 60 * 1000) {
 export default function App() {
   const location = useLocation();
   const [refreshing, setRefreshing] = useState(false);
-  const [refreshPhase, setRefreshPhase] = useState('');
   const [signalsVersion, setSignalsVersion] = useState(0);
   const lastCounts = useRef({ picks: null, intraday: null });
+  const isRefreshingRef = useRef(false);
 
   const pollAppStatus = useCallback(async () => {
+    if (isRefreshingRef.current) return;
+
     try {
       const res = await fetch('/api/status');
       if (!res.ok) return;
@@ -58,9 +60,9 @@ export default function App() {
     return () => clearInterval(id);
   }, [pollAppStatus]);
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
+    isRefreshingRef.current = true;
     setRefreshing(true);
-    setRefreshPhase('Refreshing…');
     try {
       const onToday = location.pathname === '/today';
       const refreshType = onToday ? 'intraday' : 'swing';
@@ -70,25 +72,24 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: refreshType }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.status === 202 && (data.accepted || data.alreadyRunning)) {
-        await pollRefreshStatus(60 * 1000);
-        setSignalsVersion((v) => v + 1);
-        await pollAppStatus();
-        return;
+        await pollRefreshStatus(90 * 1000);
+      } else if (!res.ok) {
+        throw new Error(data.error || 'Refresh failed to start');
       }
 
-      if (!res.ok) throw new Error(data.error || 'Refresh failed to start');
+      setSignalsVersion((v) => v + 1);
+      await pollAppStatus();
     } catch (err) {
       console.error(err.message);
+      setSignalsVersion((v) => v + 1);
     } finally {
-      setTimeout(() => {
-        setRefreshing(false);
-        setRefreshPhase('');
-      }, 800);
+      isRefreshingRef.current = false;
+      setRefreshing(false);
     }
-  };
+  }, [location.pathname, pollAppStatus]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -122,7 +123,6 @@ export default function App() {
               <Home
                 onRefresh={handleRefresh}
                 refreshing={refreshing}
-                refreshPhase={refreshPhase}
                 signalsVersion={signalsVersion}
               />
             }
@@ -133,7 +133,6 @@ export default function App() {
               <Intraday
                 onRefresh={handleRefresh}
                 refreshing={refreshing}
-                refreshPhase={refreshPhase}
                 signalsVersion={signalsVersion}
               />
             }

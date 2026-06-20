@@ -219,8 +219,12 @@ export async function runManualRefresh(type = 'swing') {
     await runSignalLifecycle();
 
     if (!isWalletDiscoveryEnabled()) {
-      setPhase('Scanning curated wallet positions…');
-      await refreshCuratedWallets({ onProgress: setPhase });
+      const lastRefresh = Number(getMeta('last_curated_refresh') || 0);
+      const positionsStale = Math.floor(Date.now() / 1000) - lastRefresh > 6 * 3600;
+      if (positionsStale) {
+        setPhase('Scanning curated wallet positions…');
+        await refreshCuratedWallets({ onProgress: setPhase });
+      }
     }
 
     if (type === 'picks') {

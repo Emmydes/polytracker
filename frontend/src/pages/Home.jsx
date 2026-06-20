@@ -33,7 +33,7 @@ async function loadSwingHistory() {
   return results.filter((d) => d.signals.length > 0);
 }
 
-export default function Home({ onRefresh, refreshing, refreshPhase, signalsVersion = 0 }) {
+export default function Home({ onRefresh, refreshing, signalsVersion = 0 }) {
   const [picks, setPicks] = useState([]);
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(true);
@@ -63,8 +63,8 @@ export default function Home({ onRefresh, refreshing, refreshPhase, signalsVersi
     }
   }, []);
 
-  const loadPicks = useCallback(async () => {
-    setLoading(true);
+  const loadPicks = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const controller = new AbortController();
@@ -91,14 +91,14 @@ export default function Home({ onRefresh, refreshing, refreshPhase, signalsVersi
 
   useEffect(() => {
     if (signalsVersion > 0) {
-      loadPicks();
+      loadPicks({ silent: refreshing });
       loadStats();
     }
-  }, [signalsVersion, loadPicks, loadStats]);
+  }, [signalsVersion, loadPicks, loadStats, refreshing]);
 
   const handleRefresh = async () => {
     if (onRefresh) await onRefresh();
-    await Promise.all([loadPicks(), loadStats(), loadHistory()]);
+    await Promise.all([loadPicks({ silent: true }), loadStats(), loadHistory()]);
   };
 
   return (
@@ -111,7 +111,6 @@ export default function Home({ onRefresh, refreshing, refreshPhase, signalsVersi
         date={date}
         onRefresh={handleRefresh}
         refreshing={refreshing}
-        refreshPhase={refreshPhase}
         intraday={false}
         historyDays={historyDays}
         totalTrackedWallets={lastUpdated?.activeWalletCount ?? 0}

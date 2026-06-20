@@ -9,7 +9,7 @@ function formatTimestamp(ts) {
   return new Date(Number(ts) * 1000).toLocaleString();
 }
 
-export default function Intraday({ onRefresh, refreshing, refreshPhase, signalsVersion = 0 }) {
+export default function Intraday({ onRefresh, refreshing, signalsVersion = 0 }) {
   const [picks, setPicks] = useState([]);
   const [date, setDate] = useState('');
   const [loading, setLoading] = useState(true);
@@ -30,8 +30,8 @@ export default function Intraday({ onRefresh, refreshing, refreshPhase, signalsV
     }
   }, []);
 
-  const loadPicks = useCallback(async () => {
-    setLoading(true);
+  const loadPicks = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const controller = new AbortController();
@@ -57,14 +57,14 @@ export default function Intraday({ onRefresh, refreshing, refreshPhase, signalsV
 
   useEffect(() => {
     if (signalsVersion > 0) {
-      loadPicks();
+      loadPicks({ silent: refreshing });
       loadHistory();
     }
-  }, [signalsVersion, loadPicks, loadHistory]);
+  }, [signalsVersion, loadPicks, loadHistory, refreshing]);
 
   const handleRefresh = async () => {
     if (onRefresh) await onRefresh();
-    await Promise.all([loadPicks(), loadHistory()]);
+    await Promise.all([loadPicks({ silent: true }), loadHistory()]);
   };
 
   return (
@@ -76,7 +76,6 @@ export default function Intraday({ onRefresh, refreshing, refreshPhase, signalsV
         date={date}
         onRefresh={handleRefresh}
         refreshing={refreshing}
-        refreshPhase={refreshPhase}
         intraday
         historyDays={history}
         totalTrackedWallets={lastUpdated?.activeWalletCount ?? 0}

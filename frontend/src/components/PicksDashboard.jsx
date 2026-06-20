@@ -47,7 +47,6 @@ export default function PicksDashboard({
   date,
   onRefresh,
   refreshing,
-  refreshPhase,
   intraday = false,
   historyDays = [],
   totalTrackedWallets = 0,
